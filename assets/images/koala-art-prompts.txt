@@ -1,0 +1,17 @@
+Built-in image generation; reference: user's Shanghai koala concept illustration.
+These are retained art specifications, not firmware instructions.
+
+Koala sprite:
+Isolate the cheerful gray koala companion on a genuinely transparent background.
+Keep the large round gray ears with peach-pink centers, yellow explorer hat with
+green leaf, yellow backpack, blue camera, smiling face, and waving paw.
+Child-friendly illustrated outlines, no text, no scenery, no device shell.
+Keep all of the mascot inside the frame; derive the 144x144 firmware sprite
+from the preserved RGBA source.
+
+Shanghai background:
+Portrait 3:4 Shanghai waterfront illustration for a 240x320 companion display.
+Oriental Pearl Tower, Shanghai skyline, river and waterfront, friendly clear sky.
+Keep the upper sky and lower dialogue area visually quiet. No koala, text,
+clock, weather labels, battery, UI controls, device shell, or promotional slogans.
+The mascot and all text are separate firmware layers.

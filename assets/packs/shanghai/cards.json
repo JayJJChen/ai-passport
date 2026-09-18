@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "places": [
+    {
+      "id": "shanghai",
+      "title": "上海",
+      "background": "background.png",
+      "home": "你好，\n一起出发！",
+      "greetings": [
+        "你好，\n今天真好！",
+        "我陪你，\n慢慢看看。",
+        "你发现了\n什么呀？"
+      ],
+      "tasks": [
+        "找一艘船，\n看看它吧。",
+        "找一片叶，\n看看颜色。",
+        "听一听，\n有什么声音"
+      ],
+      "reply": "好眼力！\n一起看看！"
+    }
+  ]
+}

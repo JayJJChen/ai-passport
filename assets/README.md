@@ -41,3 +41,24 @@ Store reusable music and sound-effect sources in `music/`.
 - Prefer 16 kHz, 16-bit mono PCM when it matches the current BSP audio path.
 - Check Flash and internal-RAM cost before embedding audio; stream or chunk long recordings.
 - Do not commit media without redistribution permission.
+
+## Koala travel assets
+
+| Files | Integration and provenance |
+| --- | --- |
+| `images/koala-sprite-source.png`, `images/koala_sprite.c` | Transparent editable source and 144 × 144 RGB565 + alpha sprite in read-only firmware. Generated with the built-in image tool using the user's koala reference; no third-party redistribution license is asserted. |
+| `packs/shanghai/background.png` | Generated Shanghai illustration, converted to 240 × 320 little-endian RGB565. |
+| `fonts/NotoSansSC-SemiBold.ttf`, `fonts/OFL.txt` | [Google Fonts Noto Sans SC](https://github.com/google/fonts/tree/main/ofl/notosanssc), SIL Open Font License 1.1; static weight 600 derived from the original variable font with fontTools. Only the static source needed by the converters is retained. |
+| `fonts/ui-24.txt`, `fonts/travel_ui_font_24.c`, `fonts/travel_ui_font_36.c` | System Chinese inventory plus printable ASCII at 24 px; fixed parent headings at 36 px. Semibold, 2 bits/pixel, no compression or kerning. |
+| `packs/shanghai/cards.json`, `cards.klp`, `cards.klp.manifest.json` | Authoring text, complete content pack, and SHA-256 identity. The exact 28/36 px font subsets are included inside the pack and load through LVGL's memory filesystem; temporary conversion files are removed automatically. |
+
+Reproduction uses Pillow 11.3.0, fontTools 4.60.1, and `lv_font_conv` 1.5.3:
+
+```text
+python tools/prepare_travel_assets.py --converter /path/to/lv_font_conv/lv_font_conv.js
+python tools/pack_cards.py build assets/packs/shanghai/cards.json assets/packs/shanghai/cards.klp --converter /path/to/lv_font_conv/lv_font_conv.js
+```
+
+Art instructions are retained in `images/koala-art-prompts.txt`. See the
+[application guide](../docs/development/koala-travel.md) for content limits,
+manual USB updates, font coverage, and hardware checks.

@@ -400,6 +400,15 @@ class FirmwareArchiveTest(unittest.TestCase):
                 self.create()
         self.assertFalse(self.destination().exists())
 
+    def test_content_pack_flash_entry_is_limited_to_its_partition(self) -> None:
+        original = (self.build / "flash_args").read_bytes()
+        images = ARCHIVE.parse_flash_args(original + b"0x700000 cards.klp\n")
+        self.assertEqual(images["cards.klp"], 0x700000)
+        for entry in (b"0x10000 cards.klp\n", b"0x700000 other.klp\n",
+                      b"0x700000 cards.klp\n0x700000 cards.klp\n"):
+            with self.subTest(entry=entry), self.assertRaises(ValueError):
+                ARCHIVE.parse_flash_args(original + entry)
+
     def test_cli_create_verify_and_failed_verification(self) -> None:
         self.assertEqual(ARCHIVE.main(["create", str(self.build), "--archive-root", str(self.output)]), 0)
         self.assertEqual(ARCHIVE.main(["verify", str(self.destination())]), 0)

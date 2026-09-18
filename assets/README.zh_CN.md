@@ -39,3 +39,23 @@
 - 与当前 BSP 音频路径匹配时优先采用 16 kHz、16 位单声道 PCM。
 - 嵌入音频前评估 Flash 与内部 RAM 成本；长录音应流式或分块。
 - 无再分发许可不提交媒体文件。
+
+## 考拉旅行资源
+
+| 文件 | 集成方式与来源 |
+| --- | --- |
+| `images/koala-sprite-source.png`、`images/koala_sprite.c` | 可编辑透明源图和只读固件中的 144 × 144 RGB565 + alpha 图层。使用内置图像工具参照用户提供的考拉生成，不声称存在第三方再分发许可。 |
+| `packs/shanghai/background.png` | 内置工具生成的上海插画，转换为 240 × 320 小端 RGB565。 |
+| `fonts/NotoSansSC-SemiBold.ttf`、`fonts/OFL.txt` | [Google Fonts Noto Sans SC](https://github.com/google/fonts/tree/main/ofl/notosanssc)，SIL Open Font License 1.1；使用 fontTools 从原始可变字体导出字重 600 的静态字体，仅保留转换工具需要的静态源文件。 |
+| `fonts/ui-24.txt`、`fonts/travel_ui_font_24.c`、`fonts/travel_ui_font_36.c` | 系统中文字符与可打印 ASCII 使用 24 px，固定家长页标题使用 36 px。半粗、2 位像素、无压缩和字距调整。 |
+| `packs/shanghai/cards.json`、`cards.klp`、`cards.klp.manifest.json` | 编辑文案、完整卡包和 SHA-256 身份记录。精确的 28/36 px 字体子集包含在卡包内部，通过 LVGL 内存文件系统加载；转换中间文件自动删除。 |
+
+重现使用 Pillow 11.3.0、fontTools 4.60.1 和 `lv_font_conv` 1.5.3：
+
+```text
+python tools/prepare_travel_assets.py --converter /path/to/lv_font_conv/lv_font_conv.js
+python tools/pack_cards.py build assets/packs/shanghai/cards.json assets/packs/shanghai/cards.klp --converter /path/to/lv_font_conv/lv_font_conv.js
+```
+
+图像生成要求保存在 `images/koala-art-prompts.txt`。
+内容限制、手动 USB 更新、字形覆盖和真机检查见[应用说明](../docs/development/koala-travel.zh_CN.md)。

@@ -32,6 +32,15 @@ run_static_checks() {
         tests/test_demo_navigation.c main/demo_navigation.c \
         -o "${test_dir}/test_demo_navigation"
     "${test_dir}/test_demo_navigation"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_travel_model.c main/travel_model.c -o "${test_dir}/test_travel_model"
+    "${test_dir}/test_travel_model"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_travel_pack.c main/travel_pack.c -o "${test_dir}/test_travel_pack"
+    "${test_dir}/test_travel_pack" assets/packs/shanghai/cards.klp
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/test_pack_cards.py
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_card_pack.py
+    PYTHONDONTWRITEBYTECODE=1 python3 tools/pack_cards.py verify assets/packs/shanghai/cards.klp
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Icomponents/bsp/src \
         tests/test_bsp_display_rounding.c components/bsp/src/bsp_display_rounding.c \
         -o "${test_dir}/test_bsp_display_rounding"
