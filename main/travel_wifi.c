@@ -1,386 +1,426 @@
-/* Application-owned Wi-Fi/BLUFI service. Callbacks only enqueue; no LVGL access. */
+/* Application-owned Wi-Fi SoftAP, DNS Captive Portal, and HTTP Web Sync service. */
 #include "travel_wifi.h"
-#include "travel_blufi_security.h"
-#include "esp_blufi.h"
-#include "esp_blufi_api.h"
-#include "esp_event.h"
-#include "esp_netif.h"
 #include "esp_wifi.h"
-#include "esp_wifi_default.h"
+#include "esp_event.h"
 #include "esp_log.h"
-#include "esp_timer.h"
-#include "esp_heap_caps.h"
-#include "nvs.h"
-#include "nvs_flash.h"
+#include "esp_netif.h"
+#include "esp_http_server.h"
+#include "lwip/sockets.h"
+#include "lwip/netdb.h"
+#include "cJSON.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
-#include "freertos/semphr.h"
 #include "freertos/task.h"
-#include "host/ble_hs.h"
-#include "nimble/nimble_port.h"
-#include "services/gap/ble_svc_gap.h"
 #include <string.h>
+#include <sys/time.h>
 
 static const char *TAG = "travel_wifi";
-static const char *DEVICE_NAME = "BLUFI_Koala"; /* Mini program filters the BLUFI prefix. */
-typedef enum { CMD_PAIR, CMD_END, CMD_FORGET, CMD_SSID, CMD_PASSWORD, CMD_CONNECT,
-               CMD_DISCONNECT, CMD_SCAN, CMD_REPORT, EV_DISCONNECTED, EV_IP,
-               EV_SCAN, EV_ADV, EV_PHONE, EV_PHONE_LEFT, EV_FAILED } command_type_t;
-typedef struct { command_type_t type; unsigned length; uint8_t bytes[64]; } command_t;
-static QueueHandle_t s_queue;
-static portMUX_TYPE s_status_lock = portMUX_INITIALIZER_UNLOCKED;
-static travel_net_status_t s_status;
-/* All following networking/credential state belongs to the service task. */
-static wifi_config_t s_saved, s_candidate, s_active;
-static bool s_has_saved, s_radio_initialized, s_radio_started, s_netif_ready, s_loop_ready;
-static bool s_wifi_handler_ready, s_ip_handler_ready, s_new_credentials, s_connecting;
-static bool s_switching, s_connected, s_pairing, s_phone, s_btc_ready, s_gatt_ready;
-static bool s_host_initialized, s_host_running, s_host_stopping, s_host_done;
-static volatile bool s_profile_ready;
-static SemaphoreHandle_t s_host_stopped;
-static TaskHandle_t s_host_task;
-static esp_netif_t *s_netif;
-static esp_event_handler_instance_t s_wifi_handler, s_ip_handler;
-static int64_t s_connect_deadline, s_pair_deadline, s_ble_stop_at;
-static unsigned s_retries;
-static bool s_radio_cleanup;
-static int64_t s_cleanup_retry_at;
-static esp_err_t radio_stop(void);
+static bool s_initialized = false;
+static bool s_ap_active = false;
+static esp_netif_t *s_netif_ap = NULL;
+static httpd_handle_t s_httpd = NULL;
+static TaskHandle_t s_dns_task = NULL;
+static int s_dns_socket = -1;
+static travel_wifi_sync_cb_t s_sync_cb = NULL;
+static travel_custom_schedule_t s_current_trip = {0};
+static travel_net_status_t s_status = {TRAVEL_NET_OFFLINE, false, false};
+static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static const char s_index_html[] =
+"<!DOCTYPE html>"
+"<html lang=\"zh-CN\">"
+"<head>"
+"<meta charset=\"UTF-8\">"
+"<meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\">"
+"<title>考拉旅行伴侣</title>"
+"<style>"
+"body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;margin:0;padding:16px;background:#f5f6fa;color:#2c3e50;}"
+".card{max-width:440px;margin:0 auto 16px;background:#fff;border-radius:14px;padding:20px;box-shadow:0 4px 12px rgba(0,0,0,0.06);}"
+"h1{font-size:20px;margin:0 0 6px;color:#123565;display:flex;align-items:center;gap:8px;}"
+"p{font-size:13px;color:#7f8c8d;margin:0 0 16px;line-height:1.4;}"
+".sync-tip{font-size:12px;color:#27ae60;margin-bottom:12px;font-weight:500;}"
+"label{display:block;font-size:13px;font-weight:600;margin:12px 0 4px;color:#34495e;}"
+"input,textarea{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #dcdde1;border-radius:8px;font-size:14px;outline:none;}"
+"input:focus,textarea:focus{border-color:#123565;}"
+"button{width:100%;padding:12px;margin-top:16px;background:#123565;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;}"
+"button:hover{background:#0e294f;}"
+"button:disabled{background:#95a5a6;cursor:not-allowed;}"
+".sec-title{font-size:14px;font-weight:bold;margin:16px 0 8px;cursor:pointer;color:#57606f;}"
+".hidden{display:none;}"
+".success-msg{background:#e8f5e9;color:#2e7d32;padding:12px;border-radius:8px;margin-top:14px;font-weight:bold;font-size:14px;text-align:center;}"
+"</style>"
+"</head>"
+"<body>"
+"<div class=\"card\">"
+"<h1>🐨 考拉旅行伴侣</h1>"
+"<p>已连接到考拉同步模式。你可以在此修改目的地与探索备忘。</p>"
+"<div id=\"syncTip\" class=\"sync-tip\">⏳ 正在同步设备时间...</div>"
+"<label for=\"dest\">目的地名称</label>"
+"<input id=\"dest\" placeholder=\"例如：上海 / 西湖 / 迪士尼\" value=\"上海\">"
+"<label for=\"t1\">探索任务 1</label>"
+"<input id=\"t1\" placeholder=\"例如：找一艘船\" value=\"找一艘船\">"
+"<label for=\"t2\">探索任务 2</label>"
+"<input id=\"t2\" placeholder=\"例如：找一片叶\" value=\"找一片叶\">"
+"<label for=\"t3\">探索任务 3</label>"
+"<input id=\"t3\" placeholder=\"例如：听一听声音\" value=\"听一听声音\">"
+"<button id=\"btnSave\" onclick=\"saveTrip()\">✔ 保存并同步到考拉</button>"
+"<div id=\"statusBox\"></div>"
+"<div class=\"sec-title\" onclick=\"toggleBatch()\">⚙ 电脑/批量 JSON 模式 ▾</div>"
+"<div id=\"batchSec\" class=\"hidden\">"
+"<textarea id=\"jsonArea\" rows=\"6\"></textarea>"
+"<button style=\"background:#57606f;margin-top:8px;\" onclick=\"applyJson()\">导入 JSON 行程</button>"
+"</div>"
+"</div>"
+"<script>"
+"window.addEventListener('DOMContentLoaded',()=>{"
+"  syncTime();"
+"  loadCurrent();"
+"});"
+"function syncTime(){"
+"  fetch('/api/time',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({epoch:Math.floor(Date.now()/1000)})})"
+"  .then(r=>r.json()).then(()=>{document.getElementById('syncTip').innerText='✔ 设备时间已自动校准';})"
+"  .catch(()=>{document.getElementById('syncTip').innerText='✔ 离线模式就绪';});"
+"}"
+"function loadCurrent(){"
+"  fetch('/api/trip').then(r=>r.json()).then(d=>{"
+"    if(d.title)document.getElementById('dest').value=d.title;"
+"    if(d.tasks&&d.tasks[0])document.getElementById('t1').value=d.tasks[0];"
+"    if(d.tasks&&d.tasks[1])document.getElementById('t2').value=d.tasks[1];"
+"    if(d.tasks&&d.tasks[2])document.getElementById('t3').value=d.tasks[2];"
+"    document.getElementById('jsonArea').value=JSON.stringify(d,null,2);"
+"  }).catch(()=>{});"
+"}"
+"function toggleBatch(){"
+"  const s=document.getElementById('batchSec');"
+"  s.classList.toggle('hidden');"
+"}"
+"function saveTrip(){"
+"  const title=document.getElementById('dest').value.trim();"
+"  const tasks=[document.getElementById('t1').value.trim(),document.getElementById('t2').value.trim(),document.getElementById('t3').value.trim()].filter(t=>t.length>0);"
+"  if(!title){alert('请输入目的地名称');return;}"
+"  send({epoch:Math.floor(Date.now()/1000),title:title,tasks:tasks});"
+"}"
+"function applyJson(){"
+"  try{"
+"    const d=JSON.parse(document.getElementById('jsonArea').value);"
+"    if(!d.title||!Array.isArray(d.tasks)){alert('JSON 必须包含 title 和 tasks 数组');return;}"
+"    d.epoch=Math.floor(Date.now()/1000);"
+"    send(d);"
+"  }catch(e){alert('JSON 格式错误: '+e.message);}"
+"}"
+"function send(payload){"
+"  const btn=document.getElementById('btnSave');"
+"  btn.disabled=true;btn.innerText='正在同步...';"
+"  fetch('/api/save_trip',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})"
+"  .then(r=>r.json()).then(d=>{"
+"    btn.innerText='✔ 已同步';"
+"    document.getElementById('statusBox').innerHTML='<div class=\"success-msg\">✔ 同步成功！考拉屏幕已更新，你可以断开连接了。</div>';"
+"  }).catch(e=>{"
+"    alert('保存失败，请检查网络');"
+"    btn.disabled=false;btn.innerText='✔ 保存并同步到考拉';"
+"  });"
+"}"
+"</script>"
+"</body>"
+"</html>";
 
 travel_net_status_t travel_wifi_status(void) {
-    portENTER_CRITICAL(&s_status_lock);
+    portENTER_CRITICAL(&s_lock);
     travel_net_status_t status = s_status;
-    portEXIT_CRITICAL(&s_status_lock);
+    portEXIT_CRITICAL(&s_lock);
     return status;
 }
-static void state(travel_net_state_t value) {
-    portENTER_CRITICAL(&s_status_lock);
-    s_status = (travel_net_status_t){value, s_pairing, s_has_saved};
-    portEXIT_CRITICAL(&s_status_lock);
+
+bool travel_wifi_is_softap_active(void) {
+    return s_ap_active;
 }
-static bool enqueue(command_type_t type, const void *bytes, unsigned length) {
-    if (!s_queue || length > 64 || (length && !bytes)) return false;
-    command_t command = {.type = type, .length = length};
-    if (length) memcpy(command.bytes, bytes, length);
-    return xQueueSend(s_queue, &command, 0) == pdTRUE;
-}
-bool travel_wifi_command(travel_wifi_command_t command) {
-    switch (command) {
-    case TRAVEL_WIFI_PAIR: return enqueue(CMD_PAIR, NULL, 0);
-    case TRAVEL_WIFI_END_PAIR: return enqueue(CMD_END, NULL, 0);
-    case TRAVEL_WIFI_FORGET: return enqueue(CMD_FORGET, NULL, 0);
-    default: return false;
+
+void travel_wifi_set_current_trip(const travel_custom_schedule_t *schedule) {
+    if (schedule) {
+        memcpy(&s_current_trip, schedule, sizeof(s_current_trip));
     }
 }
-static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data) {
-    (void)arg; (void)base; (void)data;
-    if (id == WIFI_EVENT_STA_DISCONNECTED) enqueue(EV_DISCONNECTED, NULL, 0);
-    if (id == WIFI_EVENT_SCAN_DONE) enqueue(EV_SCAN, NULL, 0);
-}
-static void ip_event(void *arg, esp_event_base_t base, int32_t id, void *data) {
-    (void)arg; (void)base; (void)data;
-    if (id == IP_EVENT_STA_GOT_IP) enqueue(EV_IP, NULL, 0);
-}
-static void send_report(void) {
-    if (!s_phone || !s_profile_ready) return;
-    esp_blufi_extra_info_t info = {0};
-    info.sta_ssid = s_active.sta.ssid;
-    info.sta_ssid_len = strnlen((const char *)s_active.sta.ssid, sizeof(s_active.sta.ssid));
-    esp_blufi_send_wifi_conn_report(WIFI_MODE_STA, s_connected ? ESP_BLUFI_STA_CONN_SUCCESS :
-        s_connecting ? ESP_BLUFI_STA_CONNECTING : ESP_BLUFI_STA_CONN_FAIL, 0, &info);
-}
-static void send_scan(void) {
-    if (!s_phone || !s_profile_ready) return;
-    uint16_t count = 8;
-    wifi_ap_record_t records[8] = {0}; esp_blufi_ap_record_t list[8] = {0};
-    if (esp_wifi_scan_get_ap_records(&count, records) != ESP_OK) {
-        esp_blufi_send_error_info(ESP_BLUFI_WIFI_SCAN_FAIL); return;
+
+static void dns_server_task(void *pvParameters) {
+    (void)pvParameters;
+    uint8_t rx_buffer[256];
+    struct sockaddr_in server_addr = {
+        .sin_family = AF_INET,
+        .sin_port = htons(53),
+        .sin_addr.s_addr = htonl(INADDR_ANY)
+    };
+    s_dns_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+    if (s_dns_socket < 0) {
+        ESP_LOGE(TAG, "DNS socket create failed");
+        vTaskDelete(NULL);
+        return;
     }
-    for (unsigned i = 0; i < count; ++i) { list[i].rssi = records[i].rssi; memcpy(list[i].ssid, records[i].ssid, sizeof(list[i].ssid)); }
-    esp_blufi_send_wifi_list(count, list);
-}
-static void blufi_reset(int reason) { (void)reason; enqueue(EV_FAILED, NULL, 0); }
-static void blufi_sync(void) {
-    if (esp_blufi_profile_init() == 0) s_profile_ready = true;
-    else enqueue(EV_FAILED, NULL, 0);
-}
-static void host_task(void *arg) {
-    (void)arg;
-    nimble_port_run();
-    /* No shared accesses after acknowledgement; owner then deletes this parked task. */
-    xSemaphoreGive(s_host_stopped);
-    vTaskSuspend(NULL);
-}
-static void blufi_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t *param) {
-    bool ok = true;
-    switch (event) {
-    case ESP_BLUFI_EVENT_INIT_FINISH: ok = enqueue(EV_ADV, NULL, 0); break;
-    case ESP_BLUFI_EVENT_BLE_CONNECT:
-        if (travel_blufi_security_init() != 0) ok = enqueue(EV_FAILED, NULL, 0);
-        else ok = enqueue(EV_PHONE, NULL, 0);
-        break;
-    case ESP_BLUFI_EVENT_BLE_DISCONNECT:
-        travel_blufi_security_deinit(); ok = enqueue(EV_PHONE_LEFT, NULL, 0); break;
-    case ESP_BLUFI_EVENT_RECV_STA_SSID:
-        ok = param->sta_ssid.ssid_len > 0 && param->sta_ssid.ssid_len <= 32 &&
-             enqueue(CMD_SSID, param->sta_ssid.ssid, param->sta_ssid.ssid_len); break;
-    case ESP_BLUFI_EVENT_RECV_STA_PASSWD:
-        ok = param->sta_passwd.passwd_len <= 64 && enqueue(CMD_PASSWORD, param->sta_passwd.passwd, param->sta_passwd.passwd_len); break;
-    case ESP_BLUFI_EVENT_REQ_CONNECT_TO_AP: ok = enqueue(CMD_CONNECT, NULL, 0); break;
-    case ESP_BLUFI_EVENT_REQ_DISCONNECT_FROM_AP: ok = enqueue(CMD_DISCONNECT, NULL, 0); break;
-    case ESP_BLUFI_EVENT_GET_WIFI_LIST: ok = enqueue(CMD_SCAN, NULL, 0); break;
-    case ESP_BLUFI_EVENT_GET_WIFI_STATUS: ok = enqueue(CMD_REPORT, NULL, 0); break;
-    case ESP_BLUFI_EVENT_RECV_SLAVE_DISCONNECT_BLE: esp_blufi_disconnect(); break;
-    case ESP_BLUFI_EVENT_REPORT_ERROR: esp_blufi_send_error_info(param->report_error.state); break;
-    default: break;
+    struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
+    setsockopt(s_dns_socket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    if (bind(s_dns_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        ESP_LOGE(TAG, "DNS socket bind failed");
+        close(s_dns_socket);
+        s_dns_socket = -1;
+        vTaskDelete(NULL);
+        return;
     }
-    if (!ok) esp_blufi_send_error_info(ESP_BLUFI_DATA_FORMAT_ERROR);
-}
-static esp_blufi_callbacks_t s_callbacks = {
-    .event_cb = blufi_event, .negotiate_data_handler = travel_blufi_negotiate,
-    .encrypt_func = travel_blufi_encrypt, .decrypt_func = travel_blufi_decrypt,
-    .checksum_func = travel_blufi_checksum,
-};
-static esp_err_t radio_start(void) {
-    if (s_radio_cleanup && radio_stop() != ESP_OK) return ESP_ERR_INVALID_STATE;
-    if (s_radio_started) return ESP_OK;
-    esp_err_t err;
-    if (!s_netif_ready) { if ((err = esp_netif_init()) != ESP_OK) return err; s_netif_ready = true; }
-    if (!s_loop_ready) { if ((err = esp_event_loop_create_default()) != ESP_OK) return err; s_loop_ready = true; }
-    if (!s_netif) {
-        esp_netif_config_t cfg = ESP_NETIF_DEFAULT_WIFI_STA();
-        s_netif = esp_netif_new(&cfg);
-        if (!s_netif) return ESP_ERR_NO_MEM;
-        err = esp_netif_attach_wifi_station(s_netif);
-        if (err == ESP_OK) err = esp_wifi_set_default_wifi_sta_handlers();
-        if (err != ESP_OK) { esp_netif_destroy_default_wifi(s_netif); s_netif = NULL; return err; }
-    }
-    if (!s_radio_initialized) {
-        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-        if ((err = esp_wifi_init(&cfg)) != ESP_OK) return err;
-        s_radio_initialized = true;
-    }
-    if (!s_wifi_handler_ready) {
-        err = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event, NULL, &s_wifi_handler);
-        if (err != ESP_OK) return err;
-        s_wifi_handler_ready = true;
-    }
-    if (!s_ip_handler_ready) {
-        err = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, ip_event, NULL, &s_ip_handler);
-        if (err != ESP_OK) return err;
-        s_ip_handler_ready = true;
-    }
-    if ((err = esp_wifi_set_storage(WIFI_STORAGE_RAM)) != ESP_OK ||
-        (err = esp_wifi_set_mode(WIFI_MODE_STA)) != ESP_OK || (err = esp_wifi_start()) != ESP_OK) return err;
-    s_radio_started = true;
-    return ESP_OK;
-}
-static esp_err_t host_start(void) {
-    if (s_host_initialized) return ESP_ERR_INVALID_STATE;
-    esp_err_t err = esp_blufi_register_callbacks(&s_callbacks);
-    if (err != ESP_OK || (err = nimble_port_init()) != ESP_OK) return err;
-    s_host_initialized = true;
-    s_host_stopped = xSemaphoreCreateBinary();
-    if (!s_host_stopped) return ESP_ERR_NO_MEM;
-    ble_hs_cfg.reset_cb = blufi_reset; ble_hs_cfg.sync_cb = blufi_sync;
-    ble_hs_cfg.gatts_register_cb = esp_blufi_gatt_svr_register_cb;
-    if (esp_blufi_gatt_svr_init() != 0) return ESP_FAIL;
-    s_gatt_ready = true;
-    if (ble_svc_gap_device_name_set(DEVICE_NAME) != 0) return ESP_FAIL;
-    esp_blufi_btc_init(); s_btc_ready = true;
-    /* The SDK's void task-launch helper does not report allocation failure. */
-    if (xTaskCreate(host_task, "koala_blufi", CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE, NULL, 5, &s_host_task) != pdPASS) return ESP_ERR_NO_MEM;
-    s_host_running = true;
-    return ESP_OK;
-}
-static esp_err_t host_stop(void) {
-    if (!s_host_initialized) return ESP_OK;
-    if (s_profile_ready) esp_blufi_adv_stop();
-    if (s_host_running && !s_host_stopping) {
-        if (nimble_port_stop() != 0) return ESP_FAIL;
-        s_host_stopping = true;
-    }
-    if (s_host_running && !s_host_done) {
-        if (xSemaphoreTake(s_host_stopped, pdMS_TO_TICKS(1500)) != pdTRUE) return ESP_ERR_TIMEOUT;
-        s_host_done = true;
-        vTaskDelete(s_host_task); s_host_task = NULL;
-    }
-    if (s_gatt_ready) { esp_blufi_gatt_svr_deinit(); s_gatt_ready = false; }
-    if (s_profile_ready) { esp_blufi_profile_deinit(); s_profile_ready = false; }
-    if (s_btc_ready) { esp_blufi_btc_deinit(); s_btc_ready = false; }
-    esp_err_t err = nimble_port_deinit();
-    if (err != ESP_OK) return err;
-    travel_blufi_security_deinit();
-    if (s_host_stopped) { vSemaphoreDelete(s_host_stopped); s_host_stopped = NULL; }
-    s_host_initialized = s_host_running = s_host_stopping = s_host_done = s_phone = false;
-    return ESP_OK;
-}
-static esp_err_t radio_stop(void) {
-    /* Retain ownership after failed SDK cleanup; retry without freeing live state. */
-    s_radio_cleanup = true; s_cleanup_retry_at = esp_timer_get_time() + 1000000;
-    s_connected = s_connecting = s_switching = false;
-    esp_err_t err;
-    if (s_radio_started) {
-        esp_wifi_scan_stop(); esp_wifi_disconnect(); err = esp_wifi_stop();
-        if (err != ESP_OK && err != ESP_ERR_WIFI_NOT_INIT) return err;
-        s_radio_started = false;
-    }
-    if (s_ip_handler_ready) {
-        err = esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, s_ip_handler);
-        if (err != ESP_OK) return err;
-        s_ip_handler_ready = false;
-    }
-    if (s_wifi_handler_ready) {
-        err = esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, s_wifi_handler);
-        if (err != ESP_OK) return err;
-        s_wifi_handler_ready = false;
-    }
-    if (s_radio_initialized) {
-        err = esp_wifi_deinit();
-        if (err != ESP_OK && err != ESP_ERR_WIFI_NOT_INIT) return err;
-        s_radio_initialized = false;
-    }
-    if (s_netif) { esp_netif_destroy_default_wifi(s_netif); s_netif = NULL; }
-    s_radio_cleanup = false;
-    return ESP_OK;
-}
-static esp_err_t save(const wifi_config_t *config) {
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open("koala_wifi", NVS_READWRITE, &handle);
-    if (err != ESP_OK) return err;
-    err = config ? nvs_set_blob(handle, "network", config, sizeof(*config)) : nvs_erase_key(handle, "network");
-    if (err == ESP_ERR_NVS_NOT_FOUND) err = ESP_OK;
-    if (err == ESP_OK) err = nvs_commit(handle);
-    nvs_close(handle); return err;
-}
-static void apply_connection(void) {
-    esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &s_active);
-    if (err == ESP_OK) err = esp_wifi_connect();
-    if (err != ESP_OK) { s_connecting = false; state(TRAVEL_NET_FAILED); send_report(); }
-}
-static void connect(const wifi_config_t *config, bool replacement) {
-    if (!config->sta.ssid[0]) { state(TRAVEL_NET_FAILED); return; }
-    if (radio_start() != ESP_OK) { radio_stop(); state(TRAVEL_NET_FAILED); return; }
-    s_active = *config; s_new_credentials = replacement;
-    s_connecting = true; s_connected = false; s_retries = 0;
-    s_connect_deadline = esp_timer_get_time() + 10000000;
-    state(TRAVEL_NET_CONNECTING);
-    s_switching = esp_wifi_disconnect() == ESP_OK;
-    if (!s_switching) apply_connection();
-}
-static void end_pair(void) {
-    s_pairing = false; s_pair_deadline = 0;
-    if (host_stop() != ESP_OK) { s_ble_stop_at = esp_timer_get_time() + 1000000; state(TRAVEL_NET_FAILED); return; }
-    s_ble_stop_at = 0;
-    if (!s_connected) {
-        radio_stop();
-        /* A bad new password never overwrites the last working network. */
-        if (s_has_saved) connect(&s_saved, false); else state(TRAVEL_NET_OFFLINE);
-    } else state(TRAVEL_NET_CONNECTED);
-    memset(&s_candidate, 0, sizeof(s_candidate));
-}
-static void process(const command_t *command) {
-    switch (command->type) {
-    case CMD_PAIR:
-        if (s_pairing) break;
-        if (s_host_initialized) { state(TRAVEL_NET_FAILED); break; }
-        s_pairing = true; s_pair_deadline = esp_timer_get_time() + 120000000;
-        memset(&s_candidate, 0, sizeof(s_candidate));
-        if (radio_start() != ESP_OK || host_start() != ESP_OK) { end_pair(); state(TRAVEL_NET_FAILED); }
-        else {
-            state(TRAVEL_NET_PAIRING);
-            ESP_LOGI(TAG, "Pairing: free heap=%u, largest block=%u",
-                (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
-                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+    ESP_LOGI(TAG, "DNS captive portal server started on port 53");
+    while (s_ap_active) {
+        struct sockaddr_in client_addr;
+        socklen_t client_len = sizeof(client_addr);
+        int len = recvfrom(s_dns_socket, rx_buffer, sizeof(rx_buffer), 0,
+                           (struct sockaddr *)&client_addr, &client_len);
+        if (len < 12) continue;
+
+        rx_buffer[2] = 0x81;
+        rx_buffer[3] = 0x80;
+        rx_buffer[4] = 0x00; rx_buffer[5] = 0x01;
+        rx_buffer[6] = 0x00; rx_buffer[7] = 0x01;
+        rx_buffer[8] = 0x00; rx_buffer[9] = 0x00;
+        rx_buffer[10] = 0x00; rx_buffer[11] = 0x00;
+
+        int idx = 12;
+        while (idx < len && rx_buffer[idx] != 0) {
+            idx += rx_buffer[idx] + 1;
         }
-        break;
-    case CMD_END: end_pair(); break;
-    case CMD_FORGET:
-        if (save(NULL) != ESP_OK) { state(TRAVEL_NET_FAILED); break; }
-        s_has_saved = false; memset(&s_saved, 0, sizeof(s_saved)); end_pair(); radio_stop();
-        memset(&s_active, 0, sizeof(s_active)); state(TRAVEL_NET_OFFLINE); break;
-    case CMD_SSID:
-        if (!s_pairing) break;
-        memset(&s_candidate, 0, sizeof(s_candidate)); memcpy(s_candidate.sta.ssid, command->bytes, command->length); break;
-    case CMD_PASSWORD:
-        if (!s_pairing) break;
-        memset(s_candidate.sta.password, 0, sizeof(s_candidate.sta.password));
-        memcpy(s_candidate.sta.password, command->bytes, command->length); break;
-    case CMD_CONNECT: if (s_pairing) connect(&s_candidate, true); break;
-    case CMD_DISCONNECT: s_connecting = false; s_connected = false; s_switching = false; esp_wifi_disconnect(); break;
-    case CMD_SCAN:
-        if (s_pairing) { wifi_scan_config_t scan = {0}; if (esp_wifi_scan_start(&scan, false) != ESP_OK) esp_blufi_send_error_info(ESP_BLUFI_WIFI_SCAN_FAIL); }
-        break;
-    case CMD_REPORT: send_report(); break;
-    case EV_DISCONNECTED:
-        if (!s_radio_started) break;
-        s_connected = false;
-        if (s_switching) { s_switching = false; apply_connection(); break; }
-        if (s_connecting && ++s_retries <= 2 && esp_timer_get_time() < s_connect_deadline) { esp_wifi_connect(); break; }
-        s_connecting = false; state(s_pairing ? TRAVEL_NET_FAILED : TRAVEL_NET_OFFLINE); send_report();
-        if (!s_pairing) radio_stop();
-        break;
-    case EV_IP:
-        if (!s_radio_started || !s_connecting || s_switching) break;
-        /* An old DHCP event must not save a newly entered, untested password. */
-        wifi_ap_record_t associated = {0};
-        if (esp_wifi_sta_get_ap_info(&associated) != ESP_OK ||
-            strncmp((const char *)associated.ssid, (const char *)s_active.sta.ssid, sizeof(s_active.sta.ssid))) break;
-        s_connected = true; s_connecting = false;
-        if (s_new_credentials) {
-            if (save(&s_active) == ESP_OK) { s_saved = s_active; s_has_saved = true; }
-            else ESP_LOGW(TAG, "Network connected but credentials could not be saved");
-            s_new_credentials = false;
+        idx += 5;
+        if (idx + 16 > (int)sizeof(rx_buffer)) continue;
+
+        rx_buffer[idx++] = 0xC0;
+        rx_buffer[idx++] = 0x0C;
+        rx_buffer[idx++] = 0x00;
+        rx_buffer[idx++] = 0x01;
+        rx_buffer[idx++] = 0x00;
+        rx_buffer[idx++] = 0x01;
+        rx_buffer[idx++] = 0x00;
+        rx_buffer[idx++] = 0x00;
+        rx_buffer[idx++] = 0x00;
+        rx_buffer[idx++] = 0x3C;
+        rx_buffer[idx++] = 0x00;
+        rx_buffer[idx++] = 0x04;
+        rx_buffer[idx++] = 192;
+        rx_buffer[idx++] = 168;
+        rx_buffer[idx++] = 4;
+        rx_buffer[idx++] = 1;
+
+        sendto(s_dns_socket, rx_buffer, idx, 0, (struct sockaddr *)&client_addr, client_len);
+    }
+    if (s_dns_socket >= 0) {
+        close(s_dns_socket);
+        s_dns_socket = -1;
+    }
+    s_dns_task = NULL;
+    vTaskDelete(NULL);
+}
+
+static esp_err_t http_root_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    httpd_resp_send(req, s_index_html, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+static esp_err_t http_captive_redirect(httpd_req_t *req) {
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", "http://192.168.4.1/");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+static esp_err_t http_get_trip_handler(httpd_req_t *req) {
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "title", s_current_trip.title[0] ? s_current_trip.title : "上海");
+    cJSON *arr = cJSON_AddArrayToObject(root, "tasks");
+    size_t count = s_current_trip.task_count ? s_current_trip.task_count : 3;
+    for (size_t i = 0; i < count; ++i) {
+        cJSON_AddItemToArray(arr, cJSON_CreateString(s_current_trip.tasks[i]));
+    }
+    char *json_str = cJSON_PrintUnformatted(root);
+    httpd_resp_set_type(req, "application/json; charset=utf-8");
+    httpd_resp_send(req, json_str, HTTPD_RESP_USE_STRLEN);
+    free(json_str);
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+static esp_err_t http_post_time_handler(httpd_req_t *req) {
+    char buf[128];
+    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (ret > 0) {
+        buf[ret] = '\0';
+        cJSON *root = cJSON_Parse(buf);
+        if (root) {
+            cJSON *ep = cJSON_GetObjectItem(root, "epoch");
+            if (cJSON_IsNumber(ep) && ep->valuedouble > 1700000000.0) {
+                struct timeval tv = { .tv_sec = (time_t)ep->valuedouble, .tv_usec = 0 };
+                settimeofday(&tv, NULL);
+                ESP_LOGI(TAG, "Clock calibrated via web sync: epoch=%ld", (long)tv.tv_sec);
+            }
+            cJSON_Delete(root);
         }
-        state(TRAVEL_NET_CONNECTED); send_report();
-        if (s_pairing) s_ble_stop_at = esp_timer_get_time() + 1500000;
-        break;
-    case EV_SCAN: send_scan(); break;
-    case EV_ADV: if (s_pairing) { esp_blufi_adv_start_with_name(DEVICE_NAME); if (!s_connected && !s_connecting) state(TRAVEL_NET_PAIRING); } break;
-    case EV_PHONE: s_phone = true; esp_blufi_adv_stop(); if (!s_connected && !s_connecting) state(TRAVEL_NET_PHONE); break;
-    case EV_PHONE_LEFT:
-        s_phone = false;
-        if (s_pairing) { esp_blufi_adv_start_with_name(DEVICE_NAME); if (!s_connected && !s_connecting) state(TRAVEL_NET_PAIRING); }
-        break;
-    case EV_FAILED: end_pair(); state(TRAVEL_NET_FAILED); break;
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, "{\"status\":\"ok\"}", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+static esp_err_t http_post_save_trip_handler(httpd_req_t *req) {
+    char buf[512];
+    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (ret > 0) {
+        buf[ret] = '\0';
+        cJSON *root = cJSON_Parse(buf);
+        if (root) {
+            cJSON *ep = cJSON_GetObjectItem(root, "epoch");
+            time_t epoch = 0;
+            cJSON *title = cJSON_GetObjectItem(root, "title");
+            cJSON *tasks = cJSON_GetObjectItem(root, "tasks");
+            if (cJSON_IsNumber(ep) && ep->valuedouble > 1700000000.0) {
+                struct timeval tv;
+                epoch = (time_t)ep->valuedouble;
+                tv.tv_sec = epoch;
+                tv.tv_usec = 0;
+                settimeofday(&tv, NULL);
+            }
+            if (cJSON_IsString(title) && cJSON_IsArray(tasks)) {
+                travel_custom_schedule_t sched;
+                int cnt = cJSON_GetArraySize(tasks);
+                int i;
+                memset(&sched, 0, sizeof(sched));
+                strncpy(sched.title, title->valuestring, sizeof(sched.title) - 1);
+                if (cnt > TRAVEL_MAX_TASKS) cnt = TRAVEL_MAX_TASKS;
+                for (i = 0; i < cnt; ++i) {
+                    cJSON *t = cJSON_GetArrayItem(tasks, i);
+                    if (cJSON_IsString(t)) {
+                        strncpy(sched.tasks[i], t->valuestring, sizeof(sched.tasks[i]) - 1);
+                    }
+                }
+                sched.task_count = (uint8_t)cnt;
+                sched.is_custom = true;
+                memcpy(&s_current_trip, &sched, sizeof(sched));
+                if (s_sync_cb) {
+                    s_sync_cb(epoch, &sched);
+                }
+            }
+            cJSON_Delete(root);
+        }
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, "{\"status\":\"ok\"}", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+static void register_http_handlers(httpd_handle_t server) {
+    static const httpd_uri_t handlers[] = {
+        { .uri = "/", .method = HTTP_GET, .handler = http_root_handler, .user_ctx = NULL },
+        { .uri = "/hotspot-detect.html", .method = HTTP_GET, .handler = http_root_handler, .user_ctx = NULL },
+        { .uri = "/generate_204", .method = HTTP_GET, .handler = http_captive_redirect, .user_ctx = NULL },
+        { .uri = "/gen_204", .method = HTTP_GET, .handler = http_captive_redirect, .user_ctx = NULL },
+        { .uri = "/ncsi.txt", .method = HTTP_GET, .handler = http_captive_redirect, .user_ctx = NULL },
+        { .uri = "/connecttest.txt", .method = HTTP_GET, .handler = http_captive_redirect, .user_ctx = NULL },
+        { .uri = "/canonical.html", .method = HTTP_GET, .handler = http_captive_redirect, .user_ctx = NULL },
+        { .uri = "/api/trip", .method = HTTP_GET, .handler = http_get_trip_handler, .user_ctx = NULL },
+        { .uri = "/api/time", .method = HTTP_POST, .handler = http_post_time_handler, .user_ctx = NULL },
+        { .uri = "/api/save_trip", .method = HTTP_POST, .handler = http_post_save_trip_handler, .user_ctx = NULL },
+    };
+    size_t i;
+    for (i = 0; i < sizeof(handlers) / sizeof(handlers[0]); ++i) {
+        httpd_register_uri_handler(server, &handlers[i]);
     }
 }
-static void service_task(void *arg) {
-    (void)arg;
-    esp_err_t err = nvs_flash_init();
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "NVS unavailable; preserved existing data: %s", esp_err_to_name(err));
-        state(TRAVEL_NET_FAILED);
-        /* Keep the command task alive; failures remain visible without touching NVS. */
-        for (;;) { command_t ignored; xQueueReceive(s_queue, &ignored, portMAX_DELAY); state(TRAVEL_NET_FAILED); }
-    }
-    nvs_handle_t handle;
-    if (nvs_open("koala_wifi", NVS_READONLY, &handle) == ESP_OK) {
-        size_t size = sizeof(s_saved);
-        s_has_saved = nvs_get_blob(handle, "network", &s_saved, &size) == ESP_OK && size == sizeof(s_saved) && s_saved.sta.ssid[0];
-        nvs_close(handle);
-    }
-    if (s_has_saved) connect(&s_saved, false); else state(TRAVEL_NET_OFFLINE);
-    for (;;) {
-        command_t command;
-        if (xQueueReceive(s_queue, &command, pdMS_TO_TICKS(100)) == pdTRUE) process(&command);
-        int64_t now = esp_timer_get_time();
-        if (s_radio_cleanup && now >= s_cleanup_retry_at) (void)radio_stop();
-        if (s_ble_stop_at && now >= s_ble_stop_at) end_pair();
-        if (s_pairing && s_pair_deadline && now >= s_pair_deadline) { end_pair(); state(TRAVEL_NET_TIMEOUT); }
-        if (s_connecting && now >= s_connect_deadline) {
-            s_connecting = s_switching = false; esp_wifi_disconnect(); send_report();
-            state(s_pairing ? TRAVEL_NET_FAILED : TRAVEL_NET_OFFLINE);
-            if (!s_pairing) radio_stop();
+
+static void wifi_event_handler(void *arg, esp_event_base_t event_base,
+                              int32_t event_id, void *event_data) {
+    (void)arg; (void)event_data;
+    if (event_base == WIFI_EVENT) {
+        if (event_id == WIFI_EVENT_AP_STACONNECTED) {
+            ESP_LOGI(TAG, "Station connected to Koala-Travel");
+            portENTER_CRITICAL(&s_lock);
+            s_status.state = TRAVEL_NET_CONNECTED;
+            portEXIT_CRITICAL(&s_lock);
+        } else if (event_id == WIFI_EVENT_AP_STADISCONNECTED) {
+            ESP_LOGI(TAG, "Station disconnected from Koala-Travel");
+            portENTER_CRITICAL(&s_lock);
+            s_status.state = TRAVEL_NET_CONNECTING;
+            portEXIT_CRITICAL(&s_lock);
         }
     }
 }
-esp_err_t travel_wifi_init(void) {
-    if (s_queue) return ESP_OK;
-    s_queue = xQueueCreate(24, sizeof(command_t));
-    if (!s_queue) return ESP_ERR_NO_MEM;
-    if (xTaskCreate(service_task, "koala_wifi", 6144, NULL, 4, NULL) != pdPASS) {
-        vQueueDelete(s_queue); s_queue = NULL; return ESP_ERR_NO_MEM;
+
+esp_err_t travel_wifi_init(travel_wifi_sync_cb_t on_sync) {
+    s_sync_cb = on_sync;
+    if (s_initialized) return ESP_OK;
+
+    ESP_ERROR_CHECK(esp_netif_init());
+    esp_err_t loop_err = esp_event_loop_create_default();
+    if (loop_err != ESP_OK && loop_err != ESP_ERR_INVALID_STATE) {
+        return loop_err;
     }
+    s_netif_ap = esp_netif_create_default_wifi_ap();
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
+                                                        ESP_EVENT_ANY_ID,
+                                                        &wifi_event_handler,
+                                                        NULL,
+                                                        NULL));
+    s_initialized = true;
+    return ESP_OK;
+}
+
+esp_err_t travel_wifi_start_softap(void) {
+    if (!s_initialized) return ESP_ERR_INVALID_STATE;
+    if (s_ap_active) return ESP_OK;
+
+    wifi_config_t wifi_config = {
+        .ap = {
+            .ssid = "Koala-Travel",
+            .ssid_len = strlen("Koala-Travel"),
+            .channel = 1,
+            .password = "",
+            .max_connection = 4,
+            .authmode = WIFI_AUTH_OPEN
+        },
+    };
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+
+    s_ap_active = true;
+    portENTER_CRITICAL(&s_lock);
+    s_status.state = TRAVEL_NET_CONNECTING;
+    s_status.provisioning = true;
+    portEXIT_CRITICAL(&s_lock);
+
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.max_open_sockets = 4;
+    config.stack_size = 4096;
+    if (httpd_start(&s_httpd, &config) == ESP_OK) {
+        register_http_handlers(s_httpd);
+        ESP_LOGI(TAG, "HTTP web server started");
+    }
+
+    xTaskCreate(dns_server_task, "dns_task", 3072, NULL, 5, &s_dns_task);
+    ESP_LOGI(TAG, "SoftAP 'Koala-Travel' ready at 192.168.4.1");
+    return ESP_OK;
+}
+
+esp_err_t travel_wifi_stop_softap(void) {
+    if (!s_ap_active) return ESP_OK;
+    s_ap_active = false;
+
+    if (s_httpd) {
+        httpd_stop(s_httpd);
+        s_httpd = NULL;
+    }
+    if (s_dns_socket >= 0) {
+        close(s_dns_socket);
+        s_dns_socket = -1;
+    }
+    esp_wifi_stop();
+
+    portENTER_CRITICAL(&s_lock);
+    s_status.state = TRAVEL_NET_OFFLINE;
+    s_status.provisioning = false;
+    portEXIT_CRITICAL(&s_lock);
+    ESP_LOGI(TAG, "SoftAP stopped");
     return ESP_OK;
 }

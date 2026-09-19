@@ -66,24 +66,27 @@ int main(int argc, char **argv) {
     assert(!travel_text_check("龘", content.body_font, 5, 2));
     assert(!travel_text_check("\xc0\xaf", content.body_font, 5, 2));
     assert(!travel_text_check("好好好好好好", content.body_font, 5, 2));
-    assert(travel_text_check("招呼探索回应发现上一下一确定返回家长设置连接配网忘记网络目的地取消清除等待手机蓝牙成功失败未联网已保存请打开微信小程序重试密码错误超时离线仍可使用确认吗内容包不可用电量未知选择就绪进行中？", &travel_ui_font_24, 200, 1));
+    assert(travel_text_check("招呼探索回应发现上一下一确定返回家长设置连接配网忘记网络目的地取消清除等待手机蓝牙成功失败未联网已保存请打开微信小程序重试密码错误超时离线仍可使用确认吗内容包不可用电量未知选择就绪进行中新？", &travel_ui_font_24, 200, 1));
     travel_model_t model; travel_model_init(&model); travel_ui_create(&content);
     travel_net_status_t net = {.state = TRAVEL_NET_OFFLINE};
-    travel_ui_refresh(&content, &model, net, 82); save_frame(argv[2], "home");
+    travel_stamp_record_t stamps = {.mask = 1, .timestamps = {1720000000, 0, 0, 0}};
+    travel_custom_schedule_t custom = {0};
+    travel_ui_refresh(&content, &model, net, 82, &stamps, &custom); save_frame(argv[2], "home");
     const travel_place_t *place = &content.places[0];
     for (size_t i = 0; i < place->task_count; ++i) {
-        model.page = TRAVEL_TASK; model.task = i; travel_ui_refresh(&content, &model, net, 82);
+        model.page = TRAVEL_TASK; model.task = i;
+        travel_ui_refresh(&content, &model, net, 82, &stamps, &custom);
         char name[40]; snprintf(name, sizeof(name), "task%u", (unsigned)i); save_frame(argv[2], name);
     }
-    model.page = TRAVEL_REPLY; travel_ui_refresh(&content, &model, net, 82); save_frame(argv[2], "reply");
-    model.page = TRAVEL_SETTINGS; travel_ui_refresh(&content, &model, net, -1); save_frame(argv[2], "settings");
-    model.page = TRAVEL_PROVISION; net.state = TRAVEL_NET_PAIRING;
-    travel_ui_refresh(&content, &model, net, 82); save_frame(argv[2], "provision");
-    model.page = TRAVEL_FORGET_CONFIRM; travel_ui_refresh(&content, &model, net, 82); save_frame(argv[2], "forget");
-    model.page = TRAVEL_PLACES; travel_ui_refresh(&content, &model, net, 82); save_frame(argv[2], "places");
+    model.page = TRAVEL_REPLY; travel_ui_refresh(&content, &model, net, 82, &stamps, &custom); save_frame(argv[2], "reply");
+    model.page = TRAVEL_PASSPORT; travel_ui_refresh(&content, &model, net, -1, &stamps, &custom); save_frame(argv[2], "passport");
+    model.page = TRAVEL_MAINTENANCE; net.state = TRAVEL_NET_CONNECTING;
+    travel_ui_refresh(&content, &model, net, 82, &stamps, &custom); save_frame(argv[2], "maintenance");
+    model.page = TRAVEL_STAMP_ANIM; travel_ui_refresh(&content, &model, net, 82, &stamps, &custom); save_frame(argv[2], "stamp_anim");
+    travel_ui_show_sync_success("新行程已就绪");
     for (size_t i = 1; i < content.place_count; ++i) {
         model.place = i; model.page = TRAVEL_HOME;
-        travel_ui_refresh(&content, &model, net, 82);
+        travel_ui_refresh(&content, &model, net, 82, &stamps, &custom);
         char name[40]; snprintf(name, sizeof(name), "destination%u", (unsigned)i); save_frame(argv[2], name);
     }
     printf("Real LVGL font coverage and 240x320 software rendering: PASS, body line=%u, title line=%u\n",
