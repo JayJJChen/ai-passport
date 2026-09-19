@@ -24,3 +24,14 @@ bool travel_model_tick(travel_model_t *model, uint32_t now);
 int travel_key_center(unsigned key, int height);
 /* Backlight only; the button service remains awake. Pairing is bounded separately. */
 unsigned travel_backlight_level(uint32_t idle_ms, bool pairing);
+
+/* Battery gauge layout geometry (outer dimensions, border, and inner gap) */
+#define TRAVEL_BATTERY_GAUGE_W       29
+#define TRAVEL_BATTERY_GAUGE_H       12
+#define TRAVEL_BATTERY_BORDER_W      2
+#define TRAVEL_BATTERY_INNER_GAP     1
+#define TRAVEL_BATTERY_FILL_MAX_W    (TRAVEL_BATTERY_GAUGE_W - 2 * (TRAVEL_BATTERY_BORDER_W + TRAVEL_BATTERY_INNER_GAP))
+#define TRAVEL_BATTERY_FILL_H        (TRAVEL_BATTERY_GAUGE_H - 2 * (TRAVEL_BATTERY_BORDER_W + TRAVEL_BATTERY_INNER_GAP))
+
+/* Battery gauge inner fill width in pixels, scaled to 0..TRAVEL_BATTERY_FILL_MAX_W px. */
+int travel_battery_fill_width(int soc);

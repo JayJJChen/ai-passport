@@ -57,13 +57,12 @@ static void input_task(void *arg) {
     for (;;) {
         key_event_t event;
         if (xQueueReceive(s_input, &event, pdMS_TO_TICKS(100)) == pdTRUE) {
-            bool waking = backlight == 0;
             last_input = now_ms();
-            if (waking) { bsp_display_backlight(75); backlight = 75; }
+            if (backlight != 75) { bsp_display_backlight(75); backlight = 75; }
             travel_input_t input = event.event == BSP_BTN_LONG ? TRAVEL_OK_LONG :
                                    event.key == BSP_BTN_UP ? TRAVEL_UP : event.key == BSP_BTN_DOWN ? TRAVEL_DOWN : TRAVEL_OK;
             const travel_place_t *place = &s_content.places[s_model.place];
-            travel_action_t action = waking ? TRAVEL_NO_ACTION : travel_model_input(&s_model, input, s_content.place_count,
+            travel_action_t action = travel_model_input(&s_model, input, s_content.place_count,
                 place->greeting_count, place->task_count, now_ms());
             if (action == TRAVEL_START_PROVISION) travel_wifi_command(TRAVEL_WIFI_PAIR);
             if (action == TRAVEL_STOP_PROVISION) travel_wifi_command(TRAVEL_WIFI_END_PAIR);

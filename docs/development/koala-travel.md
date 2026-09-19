@@ -19,10 +19,12 @@ line. Text is rendered on solid cream backgrounds. Do not squeeze longer text
 by reducing these font sizes. The three hint centers are y=53, 160, and 267,
 corresponding to the physical UP, DOWN, and OK keys across the full height.
 The battery gauge uses actual BSP SOC, or a hollow gauge when unavailable.
-The backlight dims after 30 idle seconds and turns off after 60; the first
-button press wakes the screen without changing the current card. Active,
-bounded parent provisioning keeps its instructions visible. This is backlight
-control, not CPU deep sleep.
+The backlight dims to 20% after 30 idle seconds and to a permanently visible
+10% after 60 seconds. It never turns off automatically: a completely black
+screen means the user powered the device off. Any function-button press restores
+75% brightness and performs its normal action immediately. Active, bounded
+parent provisioning keeps its instructions at 75%. This is backlight control,
+not CPU deep sleep.
 Software rendering proves layout/glyph selection only; physical readability,
 outdoor contrast, and final Chinese rendering require device observation.
 

@@ -32,7 +32,17 @@ int main(void) {
     assert(travel_backlight_level(29999, false) == 75);
     assert(travel_backlight_level(30000, false) == 20);
     assert(travel_backlight_level(59999, false) == 20);
-    assert(travel_backlight_level(60000, false) == 0);
+    assert(travel_backlight_level(60000, false) == 10);
+    assert(travel_backlight_level(UINT32_MAX, false) == 10);
     assert(travel_backlight_level(120000, true) == 75);
+    assert(TRAVEL_BATTERY_BORDER_W * 2 + TRAVEL_BATTERY_INNER_GAP * 2 + TRAVEL_BATTERY_FILL_MAX_W == TRAVEL_BATTERY_GAUGE_W);
+    assert(TRAVEL_BATTERY_BORDER_W * 2 + TRAVEL_BATTERY_INNER_GAP * 2 + TRAVEL_BATTERY_FILL_H == TRAVEL_BATTERY_GAUGE_H);
+    assert(TRAVEL_BATTERY_FILL_MAX_W == 23 && TRAVEL_BATTERY_FILL_H == 6);
+    assert(travel_battery_fill_width(-1) == 0);
+    assert(travel_battery_fill_width(0) == 0);
+    assert(travel_battery_fill_width(19) == 4);
+    assert(travel_battery_fill_width(50) == 11);
+    assert(travel_battery_fill_width(100) == 23);
+    assert(travel_battery_fill_width(120) == 23);
     puts("Travel interaction/timeout/parent-confirmation tests: PASS");
 }

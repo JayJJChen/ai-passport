@@ -52,10 +52,15 @@ void travel_ui_create(const travel_content_t *content) {
         s_hints[i] = label(hint, &travel_ui_font_24, 52);
         lv_obj_center(s_hints[i]);
     }
-    s_battery = panel(s_screen, 194, 10, 29, 12, 2);
+    s_battery = panel(s_screen, 194, 10, TRAVEL_BATTERY_GAUGE_W, TRAVEL_BATTERY_GAUGE_H, 2);
     lv_obj_set_style_border_color(s_battery, lv_color_hex(INK), 0);
-    lv_obj_set_style_border_width(s_battery, 2, 0);
-    s_battery_fill = panel(s_battery, 3, 3, 23, 6, 0);
+    lv_obj_set_style_border_width(s_battery, TRAVEL_BATTERY_BORDER_W, 0);
+    /* Child coordinates are relative to the parent content area (inside the 2 px border).
+     * Placing the fill at (INNER_GAP, INNER_GAP) yields a symmetrical 1 px gap all around:
+     * 2 px border + 1 px gap + 23 px max fill + 1 px gap + 2 px border = 29 px width,
+     * 2 px border + 1 px gap + 6 px fill + 1 px gap + 2 px border = 12 px height. */
+    s_battery_fill = panel(s_battery, TRAVEL_BATTERY_INNER_GAP, TRAVEL_BATTERY_INNER_GAP,
+                           TRAVEL_BATTERY_FILL_MAX_W, TRAVEL_BATTERY_FILL_H, 0);
     s_network = panel(s_screen, 178, 12, 8, 8, 4);
     lv_screen_load(s_screen);
 }
@@ -115,7 +120,7 @@ void travel_ui_refresh(const travel_content_t *content, const travel_model_t *mo
     if (model->page != TRAVEL_PLACES) lv_obj_set_style_text_font(s_parent_text, &travel_ui_font_24, 0);
     for (unsigned i = 0; i < 3; ++i) { lv_label_set_text(s_hints[i], hints[i]); lv_obj_center(s_hints[i]); }
     visible(s_battery_fill, battery >= 0);
-    lv_obj_set_width(s_battery_fill, battery < 0 ? 0 : battery * 23 / 100);
+    lv_obj_set_width(s_battery_fill, travel_battery_fill_width(battery));
     lv_obj_set_style_bg_color(s_battery_fill, lv_color_hex(battery < 20 ? 0xe78b66 : 0x69ac79), 0);
     visible(s_network, network.state == TRAVEL_NET_CONNECTED);
     lv_obj_set_style_bg_color(s_network, lv_color_hex(0x69ac79), 0);

@@ -6,7 +6,12 @@ int travel_key_center(unsigned key, int height) {
     return key < 3 && height > 0 ? (int)(((2 * key + 1) * (unsigned)height + 3) / 6) : -1;
 }
 unsigned travel_backlight_level(uint32_t idle_ms, bool pairing) {
-    return pairing ? 75 : idle_ms >= 60000 ? 0 : idle_ms >= 30000 ? 20 : 75;
+    return pairing ? 75 : idle_ms >= 60000 ? 10 : idle_ms >= 30000 ? 20 : 75;
+}
+int travel_battery_fill_width(int soc) {
+    if (soc <= 0) return 0;
+    if (soc >= 100) return TRAVEL_BATTERY_FILL_MAX_W;
+    return (soc * TRAVEL_BATTERY_FILL_MAX_W) / 100;
 }
 static size_t next(size_t index, size_t count) { return count ? (index + 1) % count : 0; }
 
