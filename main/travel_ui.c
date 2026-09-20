@@ -2,35 +2,35 @@
 #include <stdio.h>
 
 LV_FONT_DECLARE(travel_ui_font_24);
-LV_FONT_DECLARE(travel_ui_font_36);
 LV_FONT_DECLARE(lv_font_montserrat_14);
 extern const uint8_t koala_frames_start[] __asm__("_binary_koala_frames_start");
 extern const uint8_t koala_frames_end[] __asm__("_binary_koala_frames_end");
-static lv_obj_t *s_screen, *s_background, *s_koala, *s_title, *s_dialog, *s_dialog_text;
-static lv_obj_t *s_parent, *s_parent_text, *s_status, *s_hints[3], *s_battery, *s_battery_fill, *s_network;
-static lv_obj_t *s_stamp_box, *s_stamp_inner, *s_stamp_header, *s_stamp_title, *s_stamp_footer;
-static lv_obj_t *s_stamp_info, *s_stamp_time, *s_stamp_page;
-static lv_obj_t *s_time;
+
+static lv_obj_t *s_screen, *s_background, *s_koala, *s_title, *s_time, *s_mode;
+static lv_obj_t *s_dialog, *s_dialog_text, *s_selector, *s_selector_text, *s_hints[3];
+static lv_obj_t *s_battery, *s_battery_fill;
 static lv_image_dsc_t s_koala_frames[TRAVEL_KOALA_FRAME_COUNT];
 static travel_animation_t s_animation;
 static travel_motion_tracker_t s_motion_tracker;
 static lv_timer_t *s_animation_timer;
-static bool s_trip_changed;
 static const uint32_t INK = 0x123565, CREAM = 0xfff6df;
 
 static void visible(lv_obj_t *obj, bool show) {
     if (show) lv_obj_remove_flag(obj, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
 }
+
 static lv_obj_t *panel(lv_obj_t *parent, int x, int y, int w, int h, int radius) {
     lv_obj_t *obj = lv_obj_create(parent);
     lv_obj_remove_style_all(obj);
-    lv_obj_set_pos(obj, x, y); lv_obj_set_size(obj, w, h);
+    lv_obj_set_pos(obj, x, y);
+    lv_obj_set_size(obj, w, h);
     lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_color(obj, lv_color_hex(CREAM), 0);
     lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(obj, radius, 0);
     return obj;
 }
+
 static lv_obj_t *label(lv_obj_t *parent, const lv_font_t *font, int width) {
     lv_obj_t *obj = lv_label_create(parent);
     lv_obj_set_width(obj, width);
@@ -45,6 +45,7 @@ static void set_koala_frame(void) {
     uint8_t frame = travel_animation_frame(&s_animation);
     if (frame >= TRAVEL_KOALA_FRAME_COUNT) frame = 0;
     lv_image_set_src(s_koala, &s_koala_frames[frame]);
+    lv_obj_set_x(s_koala, travel_animation_x(&s_animation));
 }
 
 static void animation_timer_cb(lv_timer_t *timer) {
@@ -65,23 +66,14 @@ void travel_ui_play_motion(travel_motion_t motion) {
     }
 }
 
-static void cancel_motion(void) {
-    travel_animation_cancel(&s_animation);
-    if (s_koala) set_koala_frame();
-    if (s_animation_timer) lv_timer_pause(s_animation_timer);
-}
-
-void travel_ui_notify_trip_changed(void) {
-    s_trip_changed = true;
-}
-
-static void update_motion(const travel_model_t *model, bool parent) {
-    travel_motion_t motion = travel_motion_for_state(&s_motion_tracker, model, !parent,
-        s_trip_changed, lv_rand(0, 1) != 0);
-    if (parent) {
-        cancel_motion();
+static void update_motion(const travel_model_t *model, bool selector) {
+    travel_motion_t motion = travel_motion_for_state(&s_motion_tracker, model, !selector, false,
+                                                       lv_rand(0, 1) != 0);
+    if (selector) {
+        travel_animation_cancel(&s_animation);
+        set_koala_frame();
+        lv_timer_pause(s_animation_timer);
     } else if (motion != TRAVEL_MOTION_NONE) {
-        if (motion == TRAVEL_MOTION_WALK) s_trip_changed = false;
         travel_ui_play_motion(motion);
     }
 }
@@ -90,6 +82,7 @@ void travel_ui_create(const travel_content_t *content) {
     s_screen = lv_obj_create(NULL);
     lv_obj_remove_flag(s_screen, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_color(s_screen, lv_color_hex(CREAM), 0);
+
     s_background = lv_image_create(s_screen);
     lv_obj_set_pos(s_background, 0, 0);
     s_koala = lv_image_create(s_screen);
@@ -107,196 +100,132 @@ void travel_ui_create(const travel_content_t *content) {
     }
     travel_animation_init(&s_animation);
     travel_motion_tracker_init(&s_motion_tracker);
-    lv_image_set_src(s_koala, &s_koala_frames[0]); lv_obj_set_pos(s_koala, 20, 84);
+    lv_image_set_src(s_koala, &s_koala_frames[0]);
+    lv_obj_set_pos(s_koala, 20, 84);
     s_animation_timer = lv_timer_create(animation_timer_cb, 50, NULL);
     lv_timer_pause(s_animation_timer);
-    s_title = label(s_screen, content->title_font, 85); lv_obj_set_pos(s_title, 10, 10);
+
+    s_title = label(s_screen, content->title_font, 108);
+    lv_obj_set_pos(s_title, 16, 12);
     lv_obj_set_style_text_align(s_title, LV_TEXT_ALIGN_LEFT, 0);
-    s_time = lv_label_create(s_screen);
-    lv_obj_set_width(s_time, 92);
-    lv_obj_set_pos(s_time, 96, 9);
-    lv_obj_set_style_text_font(s_time, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_time, lv_color_hex(INK), 0);
+    s_time = label(s_screen, &lv_font_montserrat_14, 58);
+    lv_obj_set_pos(s_time, 128, 8);
     lv_obj_set_style_text_align(s_time, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_label_set_text(s_time, "09/19 10:00");
-    s_dialog = panel(s_screen, 8, 230, 172, 82, 20);
-    s_dialog_text = label(s_dialog, content->body_font, 156);
+    s_mode = label(s_screen, content->body_font, 58);
+    lv_obj_set_pos(s_mode, 128, 25);
+    lv_obj_set_style_text_align(s_mode, LV_TEXT_ALIGN_RIGHT, 0);
+
+    s_dialog = panel(s_screen, 8, 230, 180, 82, 20);
+    s_dialog_text = label(s_dialog, content->body_font, 168);
     lv_obj_set_style_text_line_space(s_dialog_text, 36 - content->body_font->line_height, 0);
-    s_parent = panel(s_screen, 8, 80, 172, 232, 16);
-    s_parent_text = label(s_parent, &travel_ui_font_24, 160);
-    lv_obj_set_style_text_line_space(s_parent_text, 32 - travel_ui_font_24.line_height, 0);
-    lv_obj_set_pos(s_parent_text, 6, 4);
-    s_status = label(s_parent, &travel_ui_font_24, 160); lv_obj_set_pos(s_status, 6, 179);
-    s_stamp_box = panel(s_parent, 24, 12, 124, 124, LV_RADIUS_CIRCLE);
-    lv_obj_set_style_bg_opa(s_stamp_box, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(s_stamp_box, 3, 0);
-    lv_obj_set_style_border_color(s_stamp_box, lv_color_hex(0xC93B2B), 0);
-    s_stamp_inner = panel(s_stamp_box, 13, 13, 98, 98, LV_RADIUS_CIRCLE);
-    lv_obj_set_style_bg_opa(s_stamp_inner, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(s_stamp_inner, 1, 0);
-    lv_obj_set_style_border_color(s_stamp_inner, lv_color_hex(0xC93B2B), 0);
-    s_stamp_header = label(s_stamp_box, &lv_font_montserrat_14, 98);
-    lv_obj_set_pos(s_stamp_header, 13, 14);
-    lv_label_set_text(s_stamp_header, "PASSPORT");
-    s_stamp_title = label(s_stamp_box, &travel_ui_font_24, 98);
-    lv_obj_center(s_stamp_title);
-    lv_label_set_text(s_stamp_title, "已确认");
-    s_stamp_footer = label(s_stamp_box, &lv_font_montserrat_14, 98);
-    lv_obj_set_pos(s_stamp_footer, 13, 84);
-    lv_label_set_text(s_stamp_footer, "* NO. 01 *");
-    s_stamp_info = label(s_parent, content->body_font, 160);
-    lv_obj_set_pos(s_stamp_info, 6, 144);
-    s_stamp_time = label(s_parent, &travel_ui_font_24, 160);
-    lv_obj_set_pos(s_stamp_time, 6, 178);
-    s_stamp_page = label(s_parent, &lv_font_montserrat_14, 160);
-    lv_obj_set_pos(s_stamp_page, 6, 202);
+
+    s_selector = panel(s_screen, 8, 70, 180, 242, 16);
+    s_selector_text = label(s_selector, content->body_font, 168);
+    lv_obj_set_pos(s_selector_text, 6, 26);
+    lv_obj_set_style_text_line_space(s_selector_text, 12, 0);
+
     for (unsigned i = 0; i < 3; ++i) {
-        lv_obj_t *hint = panel(s_screen, 188, travel_key_center(i, 320) - 22, 52, 44, 12);
-        s_hints[i] = label(hint, &travel_ui_font_24, 52);
+        lv_obj_t *hint = panel(s_screen, 184, travel_key_center(i, 320) - 22, 54, 44, 12);
+        s_hints[i] = label(hint, &travel_ui_font_24, 54);
         lv_obj_center(s_hints[i]);
     }
     s_battery = panel(s_screen, 194, 10, TRAVEL_BATTERY_GAUGE_W, TRAVEL_BATTERY_GAUGE_H, 2);
     lv_obj_set_style_border_color(s_battery, lv_color_hex(INK), 0);
     lv_obj_set_style_border_width(s_battery, TRAVEL_BATTERY_BORDER_W, 0);
-    /* Child coordinates are relative to the parent content area (inside the 2 px border).
-     * Placing the fill at (INNER_GAP, INNER_GAP) yields a symmetrical 1 px gap all around:
-     * 2 px border + 1 px gap + 23 px max fill + 1 px gap + 2 px border = 29 px width,
-     * 2 px border + 1 px gap + 6 px fill + 1 px gap + 2 px border = 12 px height. */
     s_battery_fill = panel(s_battery, TRAVEL_BATTERY_INNER_GAP, TRAVEL_BATTERY_INNER_GAP,
                            TRAVEL_BATTERY_FILL_MAX_W, TRAVEL_BATTERY_FILL_H, 0);
-    s_network = panel(s_screen, 186, 12, 6, 6, 3);
-    s_trip_changed = false;
+    visible(s_selector, false);
     lv_screen_load(s_screen);
 }
-static const char *network_text(travel_net_state_t state) {
-    switch (state) {
-    case TRAVEL_NET_CONNECTED: return "已连接";
-    case TRAVEL_NET_FAILED: return "连接失败";
-    case TRAVEL_NET_TIMEOUT: return "连接超时";
-    default: return "等待连接...";
-    }
-}
+
 void travel_ui_set_time(const char *time_str) {
-    if (s_time && time_str) {
-        lv_label_set_text(s_time, time_str);
-    }
+    if (s_time && time_str) lv_label_set_text(s_time, time_str);
 }
-void travel_ui_show_sync_success(const char *msg) {
-    if (s_status) {
-        lv_label_set_text(s_status, msg ? msg : "新行程已就绪");
-        lv_obj_set_style_text_color(s_status, lv_color_hex(0x2E7D32), 0);
-    }
+
+static uint8_t preferred_reminder(const travel_day_t *day, const travel_model_t *model,
+                                  const travel_completion_t *completion,
+                                  int current_minute, bool clock_valid) {
+    int16_t minutes[TRAVEL_MAX_REMINDERS] = {-1, -1, -1, -1};
+    for (size_t i = 0; i < day->reminder_count; ++i) minutes[i] = day->reminders[i].minute_of_day;
+    uint8_t mask = completion && model->day < TRAVEL_MAX_DAYS ? completion->completed[model->day] : 0;
+    return travel_model_next_reminder(minutes, day->reminder_count, mask, clock_valid,
+                                      model->preview || model->date_state != TRAVEL_DATE_ACTIVE,
+                                      current_minute);
 }
+
 void travel_ui_refresh(const travel_content_t *content, const travel_model_t *model,
-                       travel_net_status_t network, int battery,
-                       const travel_stamp_record_t *stamps,
-                       const travel_custom_schedule_t *custom) {
-    const travel_place_t *place = &content->places[model->place];
-    bool in_passport = (model->page == TRAVEL_PASSPORT || model->page == TRAVEL_STAMP_ANIM);
-    bool in_maint = (model->page == TRAVEL_MAINTENANCE);
-    bool parent = in_passport || in_maint;
+                       const travel_completion_t *completion, int battery,
+                       int current_minute, bool clock_valid) {
+    size_t day_index = model->day < content->day_count ? model->day : 0;
+    const travel_day_t *day = &content->days[day_index];
+    bool selector = model->page == TRAVEL_DAY_SELECT;
+    update_motion(model, selector);
 
-    update_motion(model, parent);
+    visible(s_background, !selector);
+    visible(s_koala, !selector);
+    visible(s_dialog, !selector);
+    visible(s_selector, selector);
+    lv_image_set_src(s_background, &day->background);
 
-    visible(s_background, !parent);
-    visible(s_koala, !parent);
-    visible(s_dialog, !parent);
-    visible(s_parent, parent);
+    const char *hints[3] = {"今天", "提醒", ""};
+    const char *mode = "";
+    if (model->date_state == TRAVEL_DATE_PREVIEW || model->date_state == TRAVEL_DATE_BEFORE ||
+        model->date_state == TRAVEL_DATE_UNKNOWN) mode = "预览";
 
-    visible(s_stamp_box, in_passport);
-    visible(s_stamp_info, in_passport);
-    visible(s_stamp_time, in_passport);
-    visible(s_stamp_page, in_passport);
+    lv_obj_set_style_text_font(s_title, content->title_font, 0);
+    lv_label_set_text(s_title, day->title);
 
-    visible(s_parent_text, in_maint);
-    visible(s_status, in_maint);
-
-    const char *hints[3] = {"行程", "探索", (model->page == TRAVEL_TASK) ? "发现" : "确认"};
-
-    if (in_passport) {
-        lv_obj_set_style_text_font(s_title, &travel_ui_font_36, 0);
-        lv_label_set_text(s_title, "探索手记");
-
-        size_t total_tasks = (custom && custom->is_custom && custom->task_count > 0)
-                           ? custom->task_count : place->task_count;
-        if (total_tasks == 0) total_tasks = 1;
-
-        size_t idx = (model->page == TRAVEL_STAMP_ANIM) ? model->task : (model->selection % total_tasks);
-        bool stamped = (model->page == TRAVEL_STAMP_ANIM) || travel_model_is_stamped(stamps, idx);
-
-        const char *task_str = "";
-        if (custom && custom->is_custom && custom->task_count > 0) {
-            task_str = custom->tasks[idx % custom->task_count];
-        } else if (idx < place->task_count) {
-            task_str = place->tasks[idx];
-        }
-
-        uint32_t color = stamped ? 0xC93B2B : 0x8E9AAF;
-        lv_obj_set_style_border_color(s_stamp_box, lv_color_hex(color), 0);
-        lv_obj_set_style_border_color(s_stamp_inner, lv_color_hex(color), 0);
-        lv_obj_set_style_text_color(s_stamp_header, lv_color_hex(color), 0);
-        lv_obj_set_style_text_color(s_stamp_title, lv_color_hex(color), 0);
-        lv_obj_set_style_text_color(s_stamp_footer, lv_color_hex(color), 0);
-
-        lv_label_set_text(s_stamp_title, stamped ? "已确认" : "待探索");
-
-        char num_buf[20];
-        snprintf(num_buf, sizeof(num_buf), "* NO. %02u *", (unsigned)(idx + 1));
-        lv_label_set_text(s_stamp_footer, num_buf);
-
-        lv_label_set_text(s_stamp_info, task_str);
-
-        if (stamped && stamps && stamps->timestamps[idx] > 0) {
-            char time_buf[24];
-            travel_model_format_time(stamps->timestamps[idx], time_buf, sizeof(time_buf));
-            lv_obj_set_style_text_font(s_stamp_time, &lv_font_montserrat_14, 0);
-            lv_label_set_text(s_stamp_time, time_buf);
+    if (selector) {
+        lv_obj_set_style_text_font(s_title, content->body_font, 0);
+        lv_label_set_text(s_title, "选择日期");
+        char selection[80];
+        if (model->selection == 0) {
+            snprintf(selection, sizeof(selection), "自动模式\n\n按日期显示");
         } else {
-            lv_obj_set_style_text_font(s_stamp_time, &travel_ui_font_24, 0);
-            lv_label_set_text(s_stamp_time, stamped ? "已确认" : "待探索");
+            size_t selected = model->selection - 1;
+            int key = travel_model_date_key_for_day(selected);
+            snprintf(selection, sizeof(selection), "10月%u日\n\n第%u天", (unsigned)(key % 100), (unsigned)(selected + 1));
         }
-
-        char page_buf[16];
-        snprintf(page_buf, sizeof(page_buf), "%u / %u", (unsigned)(idx + 1), (unsigned)total_tasks);
-        lv_label_set_text(s_stamp_page, page_buf);
-
-        if (model->page == TRAVEL_STAMP_ANIM) {
-            hints[0] = ""; hints[1] = ""; hints[2] = "确认";
-        } else {
-            hints[0] = "上一"; hints[1] = "下一"; hints[2] = "返回";
-        }
-    } else if (in_maint) {
-        lv_obj_set_style_text_font(s_title, &travel_ui_font_36, 0);
-        lv_label_set_text(s_title, "网络设置");
-        lv_label_set_text(s_parent_text, "手机连接网络:\nKoala-Travel\n\n打开:\n192.168.4.1");
-        lv_obj_set_style_text_color(s_status, lv_color_hex(INK), 0);
-        lv_label_set_text(s_status, network_text(network.state));
-        hints[0] = ""; hints[1] = ""; hints[2] = "返回";
+        lv_label_set_text(s_selector_text, selection);
+        lv_obj_center(s_selector_text);
+        hints[0] = "上一"; hints[1] = "下一"; hints[2] = "确定";
+        mode = "";
     } else {
-        lv_obj_set_style_text_font(s_title, content->title_font, 0);
-        if (custom && custom->is_custom && custom->title[0] != '\0') {
-            lv_label_set_text(s_title, custom->title);
-        } else {
-            lv_label_set_text(s_title, place->title);
+        const char *text = day->home;
+        uint8_t reminder = preferred_reminder(day, model, completion, current_minute, clock_valid);
+        if (model->page == TRAVEL_HOME) {
+            text = reminder == TRAVEL_DAY_NONE ? "今天事项\n都完成啦" : day->reminders[reminder].text;
+        } else if (model->page == TRAVEL_SCHEDULE) {
+            text = day->schedule[model->schedule % TRAVEL_SCHEDULE_CARD_COUNT];
+            static const char *kinds[] = {"路线", "活动", "住宿"};
+            mode = kinds[model->schedule % TRAVEL_SCHEDULE_CARD_COUNT];
+            hints[0] = model->schedule + 1 >= TRAVEL_SCHEDULE_CARD_COUNT ? "返回" : "下一";
+            hints[2] = "返回";
+        } else if (model->page == TRAVEL_REMINDER) {
+            size_t index = model->reminder < day->reminder_count ? model->reminder : 0;
+            text = day->reminders[index].text;
+            mode = "提醒";
+            hints[0] = "今天"; hints[1] = "下一"; hints[2] = "完成";
+        } else if (model->page == TRAVEL_FEEDBACK) {
+            text = day->reply;
+            mode = "完成";
+            hints[0] = hints[1] = hints[2] = "";
+        } else if (model->page == TRAVEL_DAY_TRANSITION) {
+            static char transition[40];
+            snprintf(transition, sizeof(transition), "第%u天，\n出发啦！", (unsigned)(day_index + 1));
+            text = transition;
+            hints[0] = hints[1] = hints[2] = "";
+            mode = "";
         }
-        lv_image_set_src(s_background, &place->background);
-
-        const char *text = place->home;
-        if (model->page == TRAVEL_GREETING) {
-            text = place->greetings[model->greeting % (place->greeting_count ? place->greeting_count : 1)];
-        } else if (model->page == TRAVEL_TASK) {
-            if (custom && custom->is_custom && custom->task_count > 0) {
-                text = custom->tasks[model->task % custom->task_count];
-            } else {
-                text = place->tasks[model->task % (place->task_count ? place->task_count : 1)];
-            }
-        } else if (model->page == TRAVEL_REPLY) {
-            text = place->reply;
+        if (model->date_state == TRAVEL_DATE_AFTER && model->page == TRAVEL_HOME) {
+            lv_obj_set_style_text_font(s_title, content->body_font, 0);
+            lv_label_set_text(s_title, "旅程完成");
         }
         lv_label_set_text(s_dialog_text, text);
         lv_obj_center(s_dialog_text);
     }
 
+    lv_label_set_text(s_mode, mode);
     for (unsigned i = 0; i < 3; ++i) {
         lv_label_set_text(s_hints[i], hints[i]);
         lv_obj_center(s_hints[i]);
@@ -304,6 +233,4 @@ void travel_ui_refresh(const travel_content_t *content, const travel_model_t *mo
     visible(s_battery_fill, battery >= 0);
     lv_obj_set_width(s_battery_fill, travel_battery_fill_width(battery));
     lv_obj_set_style_bg_color(s_battery_fill, lv_color_hex(battery < 20 ? 0xe78b66 : 0x69ac79), 0);
-    visible(s_network, network.state == TRAVEL_NET_CONNECTED);
-    lv_obj_set_style_bg_color(s_network, lv_color_hex(0x69ac79), 0);
 }

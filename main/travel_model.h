@@ -6,17 +6,12 @@
 
 typedef enum {
     TRAVEL_HOME,
-    TRAVEL_GREETING,
-    TRAVEL_TASK,
-    TRAVEL_REPLY,
-    TRAVEL_PASSPORT,
-    TRAVEL_MAINTENANCE,
-    TRAVEL_STAMP_ANIM
+    TRAVEL_SCHEDULE,
+    TRAVEL_REMINDER,
+    TRAVEL_FEEDBACK,
+    TRAVEL_DAY_SELECT,
+    TRAVEL_DAY_TRANSITION
 } travel_page_t;
-
-/* Backwards compatibility aliases */
-#define TRAVEL_SETTINGS  TRAVEL_PASSPORT
-#define TRAVEL_PROVISION TRAVEL_MAINTENANCE
 
 typedef enum {
     TRAVEL_UP,
@@ -29,49 +24,76 @@ typedef enum {
 
 typedef enum {
     TRAVEL_NO_ACTION,
-    TRAVEL_START_PROVISION,
-    TRAVEL_STOP_PROVISION,
-    TRAVEL_FORGET_WIFI,
-    TRAVEL_CHANGE_PLACE,
+    TRAVEL_COMPLETE_REMINDER,
+    TRAVEL_SAVE_SELECTION,
+    TRAVEL_DAY_CHANGED,
     TRAVEL_ENTER_DEEP_SLEEP,
-    TRAVEL_START_SOFTAP,
-    TRAVEL_STOP_SOFTAP,
-    TRAVEL_STAMP_CURRENT
 } travel_action_t;
 
-#define TRAVEL_MAX_TASKS 4
+#define TRAVEL_MAX_DAYS 11
+#define TRAVEL_MAX_REMINDERS 4
+#define TRAVEL_SCHEDULE_CARD_COUNT 3
+#define TRAVEL_FEEDBACK_MS 3000U
+#define TRAVEL_TRANSITION_MS 3350U
+#define TRAVEL_DAY_NONE 0xffU
+#define TRAVEL_SAVED_STATE_VERSION 1U
 
 typedef struct {
-    uint32_t mask;
-    uint32_t timestamps[TRAVEL_MAX_TASKS];
-} travel_stamp_record_t;
+    uint8_t completed[TRAVEL_MAX_DAYS];
+} travel_completion_t;
 
 typedef struct {
-    char title[32];
-    char tasks[TRAVEL_MAX_TASKS][48];
-    uint8_t task_count;
-    bool is_custom;
-} travel_custom_schedule_t;
+    uint32_t version;
+    travel_completion_t completion;
+    uint8_t preview_mode;
+    uint8_t preview_day;
+    uint8_t last_walk_day;
+    uint8_t reserved;
+} travel_saved_state_t;
+
+typedef enum {
+    TRAVEL_DATE_UNKNOWN,
+    TRAVEL_DATE_BEFORE,
+    TRAVEL_DATE_ACTIVE,
+    TRAVEL_DATE_AFTER,
+    TRAVEL_DATE_PREVIEW
+} travel_date_state_t;
 
 typedef struct {
     travel_page_t page;
-    size_t place, greeting, task, selection;
-    uint32_t reply_since;
+    uint8_t day;
+    uint8_t schedule;
+    uint8_t reminder;
+    uint8_t selection;
+    bool preview;
+    travel_date_state_t date_state;
+    uint32_t page_since;
 } travel_model_t;
 void travel_model_init(travel_model_t *model);
+void travel_saved_state_defaults(travel_saved_state_t *state);
+bool travel_saved_state_import(travel_saved_state_t *state, const void *data, size_t size);
+void travel_model_restore(travel_model_t *model, const travel_saved_state_t *state);
 travel_action_t travel_model_input(travel_model_t *model, travel_input_t input,
-                                  size_t places, size_t greetings, size_t tasks,
+                                  size_t schedule_count, size_t reminder_count,
                                   uint32_t now);
 bool travel_model_tick(travel_model_t *model, uint32_t now);
-void travel_model_stamp(travel_model_t *model, travel_stamp_record_t *rec, uint32_t now_epoch);
-bool travel_model_is_stamped(const travel_stamp_record_t *rec, size_t task_idx);
+void travel_model_start_transition(travel_model_t *model, uint8_t day, uint32_t now);
+bool travel_model_complete(const travel_model_t *model, travel_completion_t *completion);
+bool travel_model_is_complete(const travel_completion_t *completion, size_t day, size_t reminder);
+uint8_t travel_model_next_reminder(const int16_t *minute_of_day, size_t reminder_count,
+                                   uint8_t completed_mask, bool clock_valid,
+                                   bool preview, int current_minute);
+int travel_model_day_for_date(int year, int month, int day, travel_date_state_t *state);
+int travel_model_date_key_for_day(size_t day);
+void travel_model_format_day(size_t day, char *buf, size_t len);
+bool travel_model_clock_valid(time_t t);
 /* Hardware keys divide the full display height into three equal bands. */
 int travel_key_center(unsigned key, int height);
 /* Backlight only; the button service remains awake. Pairing is bounded separately. */
 unsigned travel_backlight_level(uint32_t idle_ms, bool pairing);
 /* Automatic sleep predicate: deep sleep after 2 minutes of inactivity. */
 bool travel_model_should_sleep(uint32_t idle_ms);
-/* Format timestamp into "MM/DD HH:MM" for top bar display. */
+/* Format timestamp into "MM/DD HH:MM" for top bar display (Perth local time). */
 void travel_model_format_time(time_t t, char *buf, size_t len);
 
 /* Battery gauge layout geometry (outer dimensions, border, and inner gap) */

@@ -41,10 +41,10 @@ run_static_checks() {
     "${test_dir}/test_travel_animation"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_travel_pack.c main/travel_pack.c -o "${test_dir}/test_travel_pack"
-    "${test_dir}/test_travel_pack" assets/packs/shanghai/cards.klp
+    "${test_dir}/test_travel_pack" assets/packs/western-australia/cards.klp
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_pack_cards.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_card_pack.py
-    PYTHONDONTWRITEBYTECODE=1 python3 tools/pack_cards.py verify assets/packs/shanghai/cards.klp
+    PYTHONDONTWRITEBYTECODE=1 python3 tools/pack_cards.py verify assets/packs/western-australia/cards.klp
     PYTHONDONTWRITEBYTECODE=1 python3 tools/pack_koala_frames.py verify
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Icomponents/bsp/src \
         tests/test_bsp_display_rounding.c components/bsp/src/bsp_display_rounding.c \

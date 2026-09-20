@@ -90,6 +90,11 @@ bool travel_animation_active(const travel_animation_t *animation) {
     return animation && animation->active;
 }
 
+int travel_animation_x(const travel_animation_t *animation) {
+    if (!animation || !animation->active || animation->motion != TRAVEL_MOTION_WALK) return 20;
+    return -80 + (100 * animation->step) / 7;
+}
+
 void travel_motion_tracker_init(travel_motion_tracker_t *tracker) {
     if (!tracker) return;
     *tracker = (travel_motion_tracker_t){0};
@@ -103,24 +108,27 @@ travel_motion_t travel_motion_for_state(travel_motion_tracker_t *tracker,
     if (!tracker || !model) return TRAVEL_MOTION_NONE;
     travel_motion_t motion = TRAVEL_MOTION_NONE;
     if (companion_visible) {
-        if (!tracker->seen) {
-            motion = TRAVEL_MOTION_WAVE;
-        } else if (trip_changed || model->place != tracker->place) {
+        if (model->page == TRAVEL_DAY_TRANSITION &&
+            (!tracker->seen || tracker->page != TRAVEL_DAY_TRANSITION || tracker->day != model->day || trip_changed)) {
             motion = TRAVEL_MOTION_WALK;
-        } else if (tracker->page == TRAVEL_STAMP_ANIM && model->page == TRAVEL_HOME) {
-            motion = TRAVEL_MOTION_NOD;
-        } else if (model->page == TRAVEL_GREETING &&
-                   (tracker->page != TRAVEL_GREETING || model->greeting != tracker->greeting)) {
+        } else if (!tracker->seen) {
             motion = TRAVEL_MOTION_WAVE;
-        } else if (model->page == TRAVEL_TASK &&
-                   (tracker->page != TRAVEL_TASK || model->task != tracker->task)) {
+        } else if (trip_changed || model->day != tracker->day) {
+            motion = TRAVEL_MOTION_WALK;
+        } else if (model->page == TRAVEL_FEEDBACK && tracker->page != TRAVEL_FEEDBACK) {
+            motion = TRAVEL_MOTION_NOD;
+        } else if (model->page == TRAVEL_SCHEDULE &&
+                   (tracker->page != TRAVEL_SCHEDULE || model->schedule != tracker->schedule)) {
+            motion = TRAVEL_MOTION_WAVE;
+        } else if (model->page == TRAVEL_REMINDER &&
+                   (tracker->page != TRAVEL_REMINDER || model->reminder != tracker->reminder)) {
             motion = point_left ? TRAVEL_MOTION_POINT_LEFT : TRAVEL_MOTION_POINT_RIGHT;
         }
-        tracker->place = model->place;
+        tracker->day = model->day;
     }
     tracker->page = model->page;
-    tracker->greeting = model->greeting;
-    tracker->task = model->task;
+    tracker->schedule = model->schedule;
+    tracker->reminder = model->reminder;
     tracker->seen = true;
     return motion;
 }

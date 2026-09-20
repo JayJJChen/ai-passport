@@ -2,6 +2,7 @@
 set -euo pipefail
 repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 lvgl="${1:?Usage: render_travel.sh <pinned-lvgl-directory>}"
+shift
 output="${repo}/build/ui-preview"
 mkdir -p "${output}"
 cmake -S "${lvgl}" -B "${output}/lvgl-build" \
@@ -14,7 +15,7 @@ cp "${repo}/assets/images/koala_frames.bin" "${output}/koala_frames"
     cd "${output}"
     "${LD:-ld}" -r -b binary koala_frames -o koala_frames.o
 )
-cc -std=c11 -Wall -Wextra -Werror \
+cc -std=c11 -g -O0 -Wall -Wextra -Werror \
     -DLV_CONF_PATH="\"${repo}/tools/render_lv_conf.h\"" \
     -I"${lvgl}" -I"${repo}/main" -I"${repo}/components/bsp/src" \
     -I"${IDF_PATH}/components/json/cJSON" \
@@ -24,4 +25,4 @@ cc -std=c11 -Wall -Wextra -Werror \
     "${repo}/components/bsp/src/bsp_display_rounding.c" "${output}/koala_frames.o" \
     "${IDF_PATH}/components/json/cJSON/cJSON.c" \
     "${output}/lvgl-build/lib/liblvgl.a" -lm -o "${output}/render_travel"
-"${output}/render_travel" "${repo}/assets/packs/shanghai/cards.klp" "${output}"
+"${output}/render_travel" "${repo}/assets/packs/western-australia/cards.klp" "${output}" "$@"

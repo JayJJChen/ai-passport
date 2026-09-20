@@ -34,7 +34,7 @@ class ContentUpdateTests(unittest.TestCase):
         with self.assertRaises(ValueError): check_layout(bytes(raw))
     def test_default_cli_does_not_open_even_an_explicit_port(self):
         result = subprocess.run([sys.executable, str(ROOT / 'tools/update_card_pack.py'),
-            str(ROOT / 'assets/packs/shanghai/cards.klp'), '--port', 'NOT_A_PORT'], text=True, capture_output=True)
+            str(ROOT / 'assets/packs/western-australia/cards.klp'), '--port', 'NOT_A_PORT'], text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('No USB port was opened', result.stdout)
 

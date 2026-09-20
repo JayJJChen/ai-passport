@@ -28,9 +28,9 @@ typedef struct {
 
 typedef struct {
     travel_page_t page;
-    size_t place;
-    size_t greeting;
-    size_t task;
+    size_t day;
+    size_t schedule;
+    size_t reminder;
     bool seen;
 } travel_motion_tracker_t;
 
@@ -41,6 +41,8 @@ void travel_animation_cancel(travel_animation_t *animation);
 bool travel_animation_tick(travel_animation_t *animation, uint32_t now_ms);
 uint8_t travel_animation_frame(const travel_animation_t *animation);
 bool travel_animation_active(const travel_animation_t *animation);
+/* Horizontal koala position: enters from off-screen left during the walk. */
+int travel_animation_x(const travel_animation_t *animation);
 void travel_motion_tracker_init(travel_motion_tracker_t *tracker);
 travel_motion_t travel_motion_for_state(travel_motion_tracker_t *tracker,
                                         const travel_model_t *model,

@@ -46,17 +46,17 @@
 | --- | --- |
 | `images/koala-sprite-source.png`、`images/koala-{wave,nod,point,walk}-source.png` | 已确认的红色无图案鸭舌帽考拉透明原画。四份动作原画均为 2 × 2 图集，由内置图像工具按用户确认的角色生成；不声称存在第三方再分发许可。 |
 | `images/koala_frames.bin`、`images/koala_frames.bin.manifest.json` | 确定性生成、只读嵌入固件的 20 帧 144 × 144 RGB565A8 图集：挥手 0–3、点头 4–7、右指 8–11、镜像左指 12–15、走路 16–19。 |
-| `packs/shanghai/background.png` | 内置工具生成的上海插画，转换为 240 × 320 小端 RGB565。 |
+| `packs/western-australia/{perth-night,dunes-pinnacles,pink-lake-gorge,fremantle-rottnest,wildlife-city-sunset}.png` | 为固定行程使用内置图像工具原创生成的五张明亮绘本风插画，不复用 PDF 照片。打包器对 11 天引用去重并转换为 240 × 320 小端 RGB565。 |
 | `fonts/NotoSansSC-SemiBold.ttf`、`fonts/OFL.txt` | [Google Fonts Noto Sans SC](https://github.com/google/fonts/tree/main/ofl/notosanssc)，SIL Open Font License 1.1；使用 fontTools 从原始可变字体导出字重 600 的静态字体，仅保留转换工具需要的静态源文件。 |
-| `fonts/ui-24.txt`、`fonts/travel_ui_font_24.c`、`fonts/travel_ui_font_36.c` | 系统中文字符与可打印 ASCII 使用 24 px，固定家长页标题使用 36 px。半粗、2 位像素、无压缩和字距调整。 |
-| `packs/shanghai/cards.json`、`cards.klp`、`cards.klp.manifest.json` | 编辑文案、完整卡包和 SHA-256 身份记录。精确的 28/36 px 字体子集包含在卡包内部，通过 LVGL 内存文件系统加载；转换中间文件自动删除。 |
+| `fonts/ui-24.txt`、`fonts/travel_ui_font_24.c`、`fonts/travel_ui_font_36.c` | 固定系统和行程字符均为 26 px Noto Sans SC SemiBold、2 位像素、无压缩和字距调整；字形编译进固件，避免运行时解析二进制字库。 |
+| `packs/western-australia/cards.json`、`cards.klp`、`cards.klp.manifest.json` | 11 天编辑文案、五背景卡包和 SHA-256 身份记录。文案按 26 px 实际字形宽度校验；卡包共六个文件，低于 1 MiB 分区上限。 |
 
 重现使用 Pillow 11.3.0、fontTools 4.60.1 和 `lv_font_conv` 1.5.3：
 
 ```text
 python tools/prepare_travel_assets.py --converter /path/to/lv_font_conv/lv_font_conv.js
 python tools/pack_koala_frames.py verify
-python tools/pack_cards.py build assets/packs/shanghai/cards.json assets/packs/shanghai/cards.klp --converter /path/to/lv_font_conv/lv_font_conv.js
+python tools/pack_cards.py build assets/packs/western-australia/cards.json assets/packs/western-australia/cards.klp
 ```
 
 图像生成要求保存在 `images/koala-art-prompts.txt`。

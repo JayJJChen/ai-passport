@@ -1,0 +1,160 @@
+{
+  "version": 2,
+  "days": [
+    {
+      "id": "day01_perth",
+      "date": "2026-10-02",
+      "title": "珀斯",
+      "home": "夜落珀斯\n入住休息",
+      "reply": "收到，已经\n完成",
+      "schedule": ["机场到酒店\n安顿休息", "抵达珀斯\n入住休息", "Four Points\nPerth"],
+      "reminders": [
+        {"text": "手机换卡\n开通网络"},
+        {"text": "确认明日\n取房车资料"},
+        {"text": "到酒店后\n报个平安"}
+      ],
+      "background": "perth-night.png"
+    },
+    {
+      "id": "day02_jurien",
+      "date": "2026-10-03",
+      "title": "尖峰石阵",
+      "home": "白沙丘出发\n傍晚看尖峰",
+      "reply": "收到，已经\n完成",
+      "schedule": ["Perth→沙丘\n→Jurien Bay", "白沙丘\n傍晚尖峰石阵", "Jurien Bay\n房车营地"],
+      "reminders": [
+        {"text": "取车前检查\n证件与行李"},
+        {"text": "确认房车\n随车用品"},
+        {"text": "出发晚就\n少去一处"}
+      ],
+      "background": "dunes-pinnacles.png"
+    },
+    {
+      "id": "day03_kalbarri",
+      "date": "2026-10-04",
+      "title": "粉湖",
+      "home": "一路向北\n初见粉湖",
+      "reply": "收到，已经\n完成",
+      "schedule": ["经 Geraldton\n到 Kalbarri", "补给休息\n第一次看粉湖", "Kalbarri\nTudor营地"],
+      "reminders": [
+        {"text": "长途驾驶前\n补水休息"},
+        {"text": "Geraldton\n完成补给"},
+        {"text": "抵达营地\n办理入住"}
+      ],
+      "background": "pink-lake-gorge.png"
+    },
+    {
+      "id": "day04_kalbarri",
+      "date": "2026-10-05",
+      "title": "卡尔巴里",
+      "home": "峡谷天空步道\n海岸看悬崖",
+      "reply": "收到，已经\n完成",
+      "schedule": ["Kalbarri\n国家公园", "自然之窗\n与 Skywalk", "Kalbarri\nTudor营地"],
+      "reminders": [
+        {"text": "带足饮水\n做好防晒"},
+        {"text": "只走适合\n老幼的路线"},
+        {"text": "累了就提前\n返回营地"}
+      ],
+      "background": "pink-lake-gorge.png"
+    },
+    {
+      "id": "day05_dongara",
+      "date": "2026-10-06",
+      "title": "东加拉",
+      "home": "再访粉湖\n海边等日落",
+      "reply": "收到，已经\n完成",
+      "schedule": ["Kalbarri出发\nHutt Lagoon", "第二次粉湖\n海边看日落", "Dongara\n房车营地"],
+      "reminders": [
+        {"text": "离营前检查\n随身物品"},
+        {"text": "长途途中\n停车休息"},
+        {"text": "抵达后确认\n今晚营位"}
+      ],
+      "background": "pink-lake-gorge.png"
+    },
+    {
+      "id": "day06_jurien",
+      "date": "2026-10-07",
+      "title": "朱里恩湾",
+      "home": "回到海边\n营地吃晚饭",
+      "reply": "收到，已经\n完成",
+      "schedule": ["Dongara\n→ Jurien Bay", "海边休息\n营地晚饭", "Jurien Bay\n房车营地"],
+      "reminders": [
+        {"text": "今晚是房车\n最后一晚"},
+        {"text": "整理个人\n随身物品"},
+        {"text": "准备明日\n还车事项"}
+      ],
+      "background": "dunes-pinnacles.png"
+    },
+    {
+      "id": "day07_fremantle",
+      "date": "2026-10-08",
+      "title": "弗里曼港",
+      "home": "告别房车\n逛港口老街",
+      "reply": "收到，已经\n完成",
+      "schedule": ["Jurien Bay\n→ Fremantle", "还房车\n逛港口老街", "Fremantle\nPrison YHA"],
+      "reminders": [
+        {"text": "爸爸记得\n还房车"},
+        {"text": "按租车要求\n检查车辆"},
+        {"text": "确认车内\n没有遗漏"},
+        {"text": "到酒店\n办理入住"}
+      ],
+      "background": "fremantle-rottnest.png"
+    },
+    {
+      "id": "day08_rottnest",
+      "date": "2026-10-09",
+      "title": "罗特尼斯",
+      "home": "坐船上岛\n找短尾矮袋鼠",
+      "reply": "收到，已经\n完成",
+      "schedule": ["Fremantle\n→ Rottnest", "坐船看海湾\n寻找 quokka", "Discovery\nRottnest"],
+      "reminders": [
+        {"text": "确认船票与\n登船安排"},
+        {"text": "带好岛上\n过夜行李"},
+        {"text": "不追不摸\n不喂野生动物"}
+      ],
+      "background": "fremantle-rottnest.png"
+    },
+    {
+      "id": "day09_scarborough",
+      "date": "2026-10-10",
+      "title": "斯卡伯勒",
+      "home": "环岛看灯塔\n下午返回海边",
+      "reply": "收到，已经\n完成",
+      "schedule": ["Rottnest\nScarborough", "海湾与灯塔\n下午离岛", "Seashells\nScarborough"],
+      "reminders": [
+        {"text": "确认退房与\n返程船安排"},
+        {"text": "离岛前取齐\n全部行李"},
+        {"text": "到公寓\n办理入住"}
+      ],
+      "background": "fremantle-rottnest.png"
+    },
+    {
+      "id": "day10_caversham",
+      "date": "2026-10-11",
+      "title": "考拉日",
+      "home": "看考拉袋鼠\n再去国王公园",
+      "reply": "收到，已经\n完成",
+      "schedule": ["Caversham\n→ Kings Park", "考拉袋鼠\n城市与河流", "Seashells\nScarborough"],
+      "reminders": [
+        {"text": "出门带水\n做好防晒"},
+        {"text": "确认动物园\n游览安排"},
+        {"text": "傍晚返回\nScarborough"}
+      ],
+      "background": "wildlife-city-sunset.png"
+    },
+    {
+      "id": "day11_airport",
+      "date": "2026-10-12",
+      "title": "返程日",
+      "home": "再看考拉海边\n然后准备回家",
+      "reply": "收到，已经\n完成",
+      "schedule": ["Yanchep\nPerth Airport", "考拉与海边\n准备返程", "今晚乘机\n返回温暖的家"],
+      "reminders": [
+        {"text": "公寓退房\n带齐行李"},
+        {"text": "确认航班和\n到机场时间"},
+        {"text": "检查证件\n手机随身物品"}
+      ],
+      "background": "wildlife-city-sunset.png"
+    }
+  ]
+}

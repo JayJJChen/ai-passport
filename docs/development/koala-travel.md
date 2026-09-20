@@ -1,76 +1,61 @@
 <p align="right"><a href="koala-travel.zh_CN.md">简体中文</a> · <strong>English</strong></p>
 
-# Koala Travel Companion
+# Fixed Western Australia Itinerary Companion
 
-The `feature/koala-travel` application starts directly in its own 240 × 320
-travel UI. It keeps the baseline hardware-test menu out of the startup and
-navigation paths. The companion works offline with the embedded Shanghai card
-pack, a passport stamp album, an optional custom trip, a battery gauge, and a
-clock. Custom trip and stamp records are stored in NVS.
+`feature/koala-travel` boots directly into a 240 × 320 offline companion for
+the fixed family trip from 2 through 12 October 2026. Eleven days provide a
+route, activity, lodging card, and up to four reminders. Legacy `custom_trip`
+and stamp data remain untouched but are no longer read. The application starts
+no SoftAP, HTTP server, or phone editor.
 
-## Display, controls, and motion
+## Date and controls
 
-The companion uses 36 px city titles, 28 px messages, and 24 px right-hand key
-hints. The three key centers are y=53, 160, and 267 for UP, DOWN, and OK. The
-battery gauge shows BSP state of charge or an empty gauge when unavailable.
+Automatic mode uses Perth's fixed UTC+8 zone. Dates map to Day 1–Day 11; an
+invalid/pre-trip clock previews Day 1, and a post-trip date retains Day 11 with
+"trip complete". Holding OK selects Auto or any itinerary day and persists the
+choice. The device has no minute-level clock editor.
 
-- UP shows or cycles greetings. Entering a greeting plays one wave.
-- DOWN shows or cycles exploration tasks. Each new task randomly uses a
-  left- or right-pointing animation.
-- OK stamps the current task. The stamp is shown for three seconds, then the
-  companion returns home and nods once.
-- Hold OK for three seconds to enter or leave the passport album. UP and DOWN
-  browse tasks; OK returns home.
-- Hold UP for three seconds to enter or leave web-sync maintenance mode.
-- Hold DOWN for three seconds to enter deep sleep immediately.
+- UP cycles route, activity, lodging, then home.
+- DOWN enters or cycles today's reminders.
+- OK completes the visible reminder; elsewhere it returns home.
+- Hold OK opens the date selector; hold DOWN sleeps immediately.
+- Hold UP is intentionally reserved for a future ESP-NOW message entry point.
 
-The first home display waves once. A successfully synchronized trip walks for
-two four-frame cycles and then waves. The same entry point is reserved for a
-future real destination or background change. Motions interrupt an earlier
-motion, stop on a neutral red-cap frame, and are hidden on passport and
-maintenance pages. The mascot is a gray koala with the approved plain red
-baseball cap, yellow backpack, and blue camera.
+Home shows the next unfinished reminder. Completion shows a three-second
+acknowledgement, then the next item; finishing the day shows an all-done message.
+Optional `HH:MM` reminder fields affect ordering when the clock is valid, but
+never wake the device, ring, or play audio.
 
-Backlight is 75% while active, 20% after 30 idle seconds, and 10% after 60
-seconds. After two minutes without input the device enters deep sleep. Any
-function-button input before sleep restores 75% and still performs its action.
+## Motion
 
-## Phone web sync
+Normal boot or same-day wake waves once. Schedule cards wave, new reminders
+point, and completion nods. First entry to Day 1, an automatic day change, or a
+manual change to another day plays the full transition: background/title first,
+"Day X, let's go", two four-frame walking cycles from off-screen left, then a
+wave at the normal position (about 3.35 seconds). Short presses are ignored
+during it, while hold-DOWN still sleeps. The last transitioned date is persisted
+so the same day does not replay.
 
-Maintenance mode starts the `Koala-Travel` SoftAP and an HTTP server at
-`192.168.4.1`. A phone can use the captive page to set a destination title,
-one to four task strings, and the device time. A valid trip is copied into NVS,
-becomes the active title/task list, shows a success message, and automatically
-returns home after two seconds. Web sync does not upload a background image and
-does not change the card-pack partition.
+## Content, art, and fonts
 
-The HTTP page is local to the temporary access point. It does not require a
-cloud account or Internet access. Leaving maintenance mode stops the SoftAP and
-HTTP server.
+The version-2 pack contains the 11-day JSON and five deduplicated 240 × 320
+RGB565 backgrounds in the 1 MiB `travel_cards` partition. The bright storybook
+illustrations were created with the built-in image generation tool and do not
+reuse photographs from the itinerary PDF. An invalid replacement pack falls
+back to the embedded Western Australia pack.
 
-## Card pack and firmware resources
+OFL-licensed Noto Sans SC SemiBold is subset at 26 px for all fixed Chinese and
+English text. The generated C fonts are compiled into firmware, avoiding a large
+runtime binary-font parse. Both the packer and runtime validate the real glyph
+advance width and the two-line layout limit.
 
-The version-1 layout keeps NVS and PHY, a factory app at `0x10000` with size
-`0x6f0000`, and `travel_cards` at `0x700000` with size `0x100000`. A valid pack
-contains destination backgrounds, text, and the exact 28/36 px font subsets.
-An invalid replacement pack falls back to the embedded Shanghai pack.
+## Simulation and validation
 
-The koala animation is firmware-resident rather than copied to internal RAM.
-`tools/pack_koala_frames.py` deterministically converts the approved 2 × 2 RGBA
-source sheets into a 20-frame, 144 × 144 RGB565A8 atlas. Frame groups are wave,
-nod, right point, mirrored left point, and walk. The atlas costs 1,244,160 bytes
-of Flash.
+`tools/render_travel.sh <pinned-lvgl-directory>` renders all eleven days,
+schedule/reminder/completion states, the date selector, and first/middle/arrived/
+wave transition frames using production UI code. Add
+`--datetime 2026-10-08T15:30` to inject a simulator time.
 
-## Validation and delivery
-
-Run `./tools/validate.sh` with ESP-IDF 5.5.3. Host tests cover interaction and
-animation timing, interruption, wraparound, frame groups, card-pack integrity,
-and repository checks. `tools/render_travel.sh <pinned-lvgl-directory>` renders
-the real UI and representative motion frames at 240 × 320; software rendering
-does not establish physical display behavior.
-
-The firmware gate retains the merged image, matching ELF/MAP, manifest,
-`flash_args`, bootloader, partition table, and application image. Flash the
-verified merged image only from `0x0` for an intentional complete refresh; its
-padding can reset NVS and PHY state. Do not treat a successful build or flash
-as proof of visible animation, button behavior, RF performance, or sleep power.
+Run `./tools/validate.sh` under ESP-IDF 5.5.3. A successful build and software
+render do not prove physical display, buttons, sleep, or animation quality;
+flashing requires separate authorization.

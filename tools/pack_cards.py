@@ -2,12 +2,12 @@
 """Build a self-contained, USB-replaceable travel card pack; no C compiler needed."""
 from __future__ import annotations
 import argparse
+import functools
 import hashlib
 import json
 import re
 import struct
 import subprocess
-import tempfile
 import zlib
 from pathlib import Path
 
@@ -15,37 +15,101 @@ CAPACITY = 0x100000
 HEADER = struct.Struct('<8s6I')
 ENTRY = struct.Struct('<24s4I')
 ROOT = Path(__file__).resolve().parents[1]
+MAX_DAYS = 11
+MAX_REMINDERS = 4
+BODY_MAX_PX = 168
+TITLE_MAX_PX = 108
+SYSTEM_BODY_TEXT = '今天提醒完成住宿活动自动预览出发啦旅程完成下一件事事项都完成啦收到已经完成第天选择日期自动模式月日返回上一下一确定路线按显示0123456789:/'
 
-def validate_manifest(manifest: dict) -> tuple[str, str]:
-    if not isinstance(manifest, dict) or manifest.get('version') != 1 or not isinstance(manifest.get('places'), list) or not 1 <= len(manifest['places']) <= 6:
-        raise ValueError('version must be 1; provide 1..6 places')
+@functools.lru_cache(maxsize=4)
+def _ttf_metrics(font_path: str):
+    """Read the format-12 cmap and horizontal advances without optional Python packages."""
+    data = Path(font_path).read_bytes()
+    num_tables = struct.unpack_from('>H', data, 4)[0]
+    tables = {}
+    for index in range(num_tables):
+        tag, _, offset, length = struct.unpack_from('>4sIII', data, 12 + index * 16)
+        tables[tag.decode('ascii')] = (offset, length)
+    head, _ = tables['head']; hhea, _ = tables['hhea']; maxp, _ = tables['maxp']; hmtx, _ = tables['hmtx']; cmap, _ = tables['cmap']
+    units = struct.unpack_from('>H', data, head + 18)[0]
+    glyphs = struct.unpack_from('>H', data, maxp + 4)[0]
+    metrics = struct.unpack_from('>H', data, hhea + 34)[0]
+    advances = [struct.unpack_from('>H', data, hmtx + index * 4)[0] for index in range(metrics)]
+    advances.extend([advances[-1]] * (glyphs - metrics))
+    cmap_count = struct.unpack_from('>H', data, cmap + 2)[0]
+    groups = None
+    for index in range(cmap_count):
+        _, _, relative = struct.unpack_from('>HHI', data, cmap + 4 + index * 8)
+        subtable = cmap + relative
+        if struct.unpack_from('>H', data, subtable)[0] == 12:
+            count = struct.unpack_from('>I', data, subtable + 12)[0]
+            groups = [struct.unpack_from('>III', data, subtable + 16 + group * 12) for group in range(count)]
+            break
+    if groups is None: raise ValueError('font needs a Unicode format-12 cmap')
+    return units, advances, groups
+
+def _line_width(line: str, font_path: Path, size: int) -> float:
+    units, advances, groups = _ttf_metrics(str(font_path.resolve()))
+    total = 0
+    for char in line:
+        codepoint = ord(char)
+        glyph = None
+        lo, hi = 0, len(groups)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            start, end, first = groups[mid]
+            if codepoint < start: hi = mid
+            elif codepoint > end: lo = mid + 1
+            else:
+                glyph = first + codepoint - start
+                break
+        if glyph is None or glyph >= len(advances): raise ValueError(f'source font lacks U+{codepoint:04X}')
+        total += advances[glyph]
+    return total * size / units
+
+def _fits(text: str, font_path: Path, size: int, max_pixels: int, max_lines: int) -> bool:
+    lines = text.split('\n')
+    return len(lines) <= max_lines and all(line and _line_width(line, font_path, size) <= max_pixels for line in lines)
+
+def validate_manifest(manifest: dict, font_path: Path | None = None) -> tuple[str, str]:
+    font_path = font_path or ROOT / 'assets/fonts/NotoSansSC-SemiBold.ttf'
+    if not isinstance(manifest, dict) or manifest.get('version') != 2 or not isinstance(manifest.get('days'), list) or len(manifest['days']) != MAX_DAYS:
+        raise ValueError('version must be 2; provide exactly 11 days')
     bodies, titles, ids = [], [], set()
-    for place in manifest['places']:
-        if not isinstance(place, dict): raise ValueError('each place must be an object')
-        identifier = place.get('id', '')
+    expected_dates = [f'2026-10-{day:02d}' for day in range(2, 13)]
+    for index, day in enumerate(manifest['days']):
+        if not isinstance(day, dict): raise ValueError('each day must be an object')
+        identifier = day.get('id', '')
         if not isinstance(identifier, str) or not re.fullmatch(r'[a-z0-9_]{1,20}', identifier) or identifier in ids:
-            raise ValueError('place id must be unique lowercase ASCII, at most 20 characters')
+            raise ValueError('day id must be unique lowercase ASCII, at most 20 characters')
         ids.add(identifier)
-        title = place.get('title', '')
-        if not isinstance(title, str) or not 1 <= len(title) <= 4 or any(ord(c) < 32 for c in title):
-            raise ValueError('title must contain 1..4 printable characters')
+        if day.get('date') != expected_dates[index]: raise ValueError('days must cover 2026-10-02 through 2026-10-12 in order')
+        title = day.get('title', '')
+        if not isinstance(title, str) or not _fits(title, font_path, 26, TITLE_MAX_PX, 1):
+            raise ValueError('title exceeds the one-line pixel budget')
         titles.append(title)
-        text = [place.get('home'), place.get('reply')]
-        for key in ('greetings', 'tasks'):
-            values = place.get(key)
-            if not isinstance(values, list) or not 1 <= len(values) <= 20:
-                raise ValueError(f'{key} must contain 1..20 cards')
-            text.extend(values)
+        text = [day.get('home'), day.get('reply')]
+        schedule = day.get('schedule')
+        if not isinstance(schedule, list) or len(schedule) != 3: raise ValueError('schedule must contain route, activity, and lodging')
+        text.extend(schedule)
+        reminders = day.get('reminders')
+        if not isinstance(reminders, list) or not 1 <= len(reminders) <= MAX_REMINDERS:
+            raise ValueError('reminders must contain 1..4 items')
+        for reminder in reminders:
+            if not isinstance(reminder, dict) or not isinstance(reminder.get('text'), str): raise ValueError('each reminder needs text')
+            at = reminder.get('at')
+            if at is not None and (not isinstance(at, str) or not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d', at)):
+                raise ValueError('reminder time must be HH:MM')
+            text.append(reminder['text'])
         for value in text:
             if not isinstance(value, str) or not value:
                 raise ValueError('card text must be a nonempty string')
-            lines = value.split('\n')
-            if len(lines) > 2 or any(not line or len(line) > 5 or any(ord(c) < 32 for c in line) for line in lines):
-                raise ValueError('use at most 2 lines, 5 printable characters per line; do not shrink fonts')
+            if any(ord(c) < 32 and c != '\n' for c in value) or not _fits(value, font_path, 26, BODY_MAX_PX, 2):
+                raise ValueError(f'card text exceeds the two-line pixel budget: {value!r}')
             bodies.append(value)
-        if not isinstance(place.get('background'), str):
-            raise ValueError('each place requires a background filename')
-    return ''.join(bodies).replace('\n', ''), ''.join(titles)
+        if not isinstance(day.get('background'), str):
+            raise ValueError('each day requires a background filename')
+    return ''.join(bodies).replace('\n', '') + SYSTEM_BODY_TEXT, ''.join(titles)
 
 def make_archive(files: dict[str, bytes]) -> bytes:
     if not 1 <= len(files) <= 12:
@@ -86,14 +150,12 @@ def read_archive(data: bytes) -> dict[str, bytes]:
 def verify_pack(data: bytes) -> dict[str, bytes]:
     files = read_archive(data)
     raw = files.get('manifest.json', b'')
-    if not raw or len(raw) > 8192 or raw[-1:] != b'\0' or b'\0' in raw[:-1]:
-        raise ValueError('manifest must fit 8 KiB and end with exactly one NUL')
+    if not raw or len(raw) > 32768 or raw[-1:] != b'\0' or b'\0' in raw[:-1]:
+        raise ValueError('manifest must fit 32 KiB and end with exactly one NUL')
     manifest = json.loads(raw[:-1])
     validate_manifest(manifest)
-    for name, budget in [('font28.bin', 16384), ('font36.bin', 4096)]:
-        if not 1 <= len(files.get(name, b'')) <= budget: raise ValueError('missing font or font budget exceeded')
-    for place in manifest['places']:
-        if len(files.get(place['background'], b'')) != 240 * 320 * 2:
+    for day in manifest['days']:
+        if len(files.get(day['background'], b'')) != 240 * 320 * 2:
             raise ValueError('missing background or invalid dimensions')
     return files
 
@@ -118,30 +180,29 @@ def convert_font(font: Path, converter: Path, symbols: str, size: int, output: P
         generated = generated.replace(str(font), font.name).replace(str(output), output.name)
         output.write_text(generated.rstrip() + '\n', encoding='utf-8')
 
-def build(manifest_path: Path, output: Path, font: Path, converter: Path) -> None:
+def build(manifest_path: Path, output: Path, font: Path) -> None:
     if output.resolve() == manifest_path.resolve(): raise ValueError('output must not replace the authoring manifest')
     source = json.loads(manifest_path.read_text(encoding='utf-8'))
-    body, title = validate_manifest(source)
+    body, title = validate_manifest(source, font)
     output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='koala-fonts-', dir=output.parent) as temporary:
-        font28 = Path(temporary) / 'font28.bin'; font36 = Path(temporary) / 'font36.bin'
-        convert_font(font, converter, body, 28, font28)
-        convert_font(font, converter, title, 36, font36)
-        if font28.stat().st_size > 16384 or font36.stat().st_size > 4096:
-            raise ValueError('font subset exceeds RAM budget; split the content into smaller packs')
-        files = {'font28.bin': font28.read_bytes(), 'font36.bin': font36.read_bytes()}
+    files = {}
     manifest = json.loads(json.dumps(source))
-    for i, place in enumerate(manifest['places']):
-        image_path = (manifest_path.parent / place['background']).resolve()
+    backgrounds: dict[Path, str] = {}
+    for day in manifest['days']:
+        image_path = (manifest_path.parent / day['background']).resolve()
         if not image_path.is_relative_to(manifest_path.parent.resolve()): raise ValueError('background must stay inside pack folder')
-        name = f'bg{i}.rgb565'; files[name] = rgb565(image_path); place['background'] = name
+        if image_path not in backgrounds:
+            name = f'bg{len(backgrounds)}.rgb565'
+            files[name] = rgb565(image_path)
+            backgrounds[image_path] = name
+        day['background'] = backgrounds[image_path]
     files['manifest.json'] = json.dumps(manifest, ensure_ascii=False, separators=(',', ':')).encode() + b'\0'
-    if len(files['manifest.json']) > 8192: raise ValueError('manifest exceeds 8 KiB')
+    if len(files['manifest.json']) > 32768: raise ValueError('manifest exceeds 32 KiB')
     archive = make_archive(files)
     verify_pack(archive)
     output.write_bytes(archive)
     identity = {'format': 1, 'size': len(archive), 'sha256': hashlib.sha256(archive).hexdigest(),
-                'content_offset': '0x700000', 'font_converter': 'lv_font_conv 1.5.3',
+                'content_offset': '0x700000', 'font_storage': 'firmware compile-time subsets',
                 'source_font_sha256': hashlib.sha256(font.read_bytes()).hexdigest(),
                 'body_glyphs': sorted(set(body)), 'title_glyphs': sorted(set(title))}
     output.with_name(output.name + '.manifest.json').write_text(json.dumps(identity, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
@@ -152,10 +213,9 @@ def main() -> None:
     sub = parser.add_subparsers(dest='command', required=True)
     create = sub.add_parser('build'); create.add_argument('manifest', type=Path); create.add_argument('output', type=Path)
     create.add_argument('--font', type=Path, default=ROOT / 'assets/fonts/NotoSansSC-SemiBold.ttf')
-    create.add_argument('--converter', type=Path, required=True)
     verify = sub.add_parser('verify'); verify.add_argument('pack', type=Path)
     args = parser.parse_args()
-    if args.command == 'build': build(args.manifest.resolve(), args.output.resolve(), args.font.resolve(), args.converter.resolve())
+    if args.command == 'build': build(args.manifest.resolve(), args.output.resolve(), args.font.resolve())
     else:
         data = args.pack.read_bytes(); files = verify_pack(data)
         print(f'Card pack verification: PASS, {len(files)} files, SHA256 {hashlib.sha256(data).hexdigest()}')

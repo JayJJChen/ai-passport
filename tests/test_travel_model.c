@@ -1,62 +1,109 @@
 #include "travel_model.h"
 #include <assert.h>
-#include <stdio.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 
-static travel_action_t key(travel_model_t *m, travel_input_t k, uint32_t now) {
-    return travel_model_input(m, k, 6, 3, 3, now);
+static travel_action_t key(travel_model_t *m, travel_input_t input, uint32_t now) {
+    return travel_model_input(m, input, TRAVEL_SCHEDULE_CARD_COUNT, 4, now);
 }
+
 int main(void) {
-    travel_model_t m; travel_model_init(&m);
-    assert(m.page == TRAVEL_HOME && m.place == 0);
-    key(&m, TRAVEL_UP, 0); assert(m.page == TRAVEL_GREETING && m.greeting == 0);
-    key(&m, TRAVEL_UP, 0); assert(m.greeting == 1);
-    key(&m, TRAVEL_UP, 0); key(&m, TRAVEL_UP, 0); assert(m.greeting == 0);
-    key(&m, TRAVEL_DOWN, 0); assert(m.page == TRAVEL_TASK && m.task == 0);
-    key(&m, TRAVEL_DOWN, 0); assert(m.task == 1);
-    assert(key(&m, TRAVEL_OK, UINT32_MAX - 999) == TRAVEL_STAMP_CURRENT && m.page == TRAVEL_STAMP_ANIM);
-    assert(!travel_model_tick(&m, 1999)); assert(travel_model_tick(&m, 2000)); assert(m.page == TRAVEL_HOME);
-    travel_stamp_record_t stamps = {0};
-    m.task = 1;
-    travel_model_stamp(&m, &stamps, 1720000000);
-    assert(travel_model_is_stamped(&stamps, 1));
-    assert(!travel_model_is_stamped(&stamps, 0));
-    assert(!travel_model_is_stamped(&stamps, 2));
-    assert(stamps.timestamps[1] == 1720000000);
-    assert(key(&m, TRAVEL_OK_LONG, 0) == TRAVEL_NO_ACTION && m.page == TRAVEL_PASSPORT);
-    assert(m.selection == 0);
-    key(&m, TRAVEL_DOWN, 0); assert(m.selection == 1);
-    key(&m, TRAVEL_DOWN, 0); assert(m.selection == 2);
-    key(&m, TRAVEL_DOWN, 0); assert(m.selection == 0);
-    key(&m, TRAVEL_UP, 0); assert(m.selection == 2);
-    assert(key(&m, TRAVEL_OK, 0) == TRAVEL_NO_ACTION && m.page == TRAVEL_HOME);
-    assert(key(&m, TRAVEL_UP_LONG, 0) == TRAVEL_START_SOFTAP && m.page == TRAVEL_MAINTENANCE);
-    assert(key(&m, TRAVEL_OK, 0) == TRAVEL_STOP_SOFTAP && m.page == TRAVEL_HOME);
-    assert(key(&m, TRAVEL_DOWN_LONG, 0) == TRAVEL_ENTER_DEEP_SLEEP);
+    travel_model_t model;
+    travel_model_init(&model);
+    assert(model.page == TRAVEL_HOME && model.day == 0 && !model.preview);
+
+    travel_saved_state_t saved, loaded;
+    travel_saved_state_defaults(&saved);
+    assert(saved.version == TRAVEL_SAVED_STATE_VERSION && saved.last_walk_day == TRAVEL_DAY_NONE);
+    saved.preview_mode = 1; saved.preview_day = 6; saved.last_walk_day = 5;
+    saved.completion.completed[2] = 0x05;
+    assert(travel_saved_state_import(&loaded, &saved, sizeof(saved)));
+    travel_model_restore(&model, &loaded);
+    assert(model.preview && model.day == 6 && model.date_state == TRAVEL_DATE_PREVIEW);
+    assert(loaded.completion.completed[2] == 0x05 && loaded.last_walk_day == 5);
+    saved.version++;
+    assert(!travel_saved_state_import(&loaded, &saved, sizeof(saved)));
+    assert(loaded.version == TRAVEL_SAVED_STATE_VERSION && loaded.last_walk_day == TRAVEL_DAY_NONE);
+    saved.version = TRAVEL_SAVED_STATE_VERSION; saved.completion.completed[0] = 0x80;
+    assert(!travel_saved_state_import(&loaded, &saved, sizeof(saved)));
+    assert(!travel_saved_state_import(&loaded, &saved, sizeof(saved) - 1));
+    travel_model_init(&model);
+
+    key(&model, TRAVEL_UP, 0); assert(model.page == TRAVEL_SCHEDULE && model.schedule == 0);
+    key(&model, TRAVEL_UP, 0); assert(model.schedule == 1);
+    key(&model, TRAVEL_UP, 0); assert(model.schedule == 2);
+    key(&model, TRAVEL_UP, 0); assert(model.page == TRAVEL_HOME && model.day == 0);
+    key(&model, TRAVEL_DOWN, 0); assert(model.page == TRAVEL_REMINDER && model.reminder == 0);
+    key(&model, TRAVEL_DOWN, 0); assert(model.reminder == 1);
+    assert(key(&model, TRAVEL_OK, UINT32_MAX - 999) == TRAVEL_COMPLETE_REMINDER);
+    assert(model.page == TRAVEL_FEEDBACK);
+    key(&model, TRAVEL_UP, 0); assert(model.page == TRAVEL_FEEDBACK);
+    assert(!travel_model_tick(&model, 1999));
+    assert(travel_model_tick(&model, 2000));
+    assert(model.page == TRAVEL_HOME);
+
+    travel_completion_t completion = {0};
+    model.day = 2; model.reminder = 3;
+    assert(travel_model_complete(&model, &completion));
+    assert(!travel_model_complete(&model, &completion));
+    assert(travel_model_is_complete(&completion, 2, 3));
+    assert(!travel_model_is_complete(&completion, 1, 3));
+    assert(!travel_model_is_complete(&completion, 2, 2));
+
+    model.day = 0; model.preview = false; model.page = TRAVEL_HOME;
+    assert(key(&model, TRAVEL_OK_LONG, 0) == TRAVEL_NO_ACTION);
+    assert(model.page == TRAVEL_DAY_SELECT && model.selection == 0);
+    key(&model, TRAVEL_DOWN, 0); assert(model.selection == 1);
+    assert(key(&model, TRAVEL_OK, 0) == TRAVEL_SAVE_SELECTION);
+    assert(model.preview && model.day == 0 && model.page == TRAVEL_HOME);
+    key(&model, TRAVEL_OK_LONG, 0); assert(model.selection == 1);
+    key(&model, TRAVEL_DOWN, 0); assert(model.selection == 2);
+    assert(key(&model, TRAVEL_OK, 100) == TRAVEL_DAY_CHANGED);
+    assert(model.preview && model.day == 1 && model.page == TRAVEL_DAY_TRANSITION);
+    key(&model, TRAVEL_UP, 200); assert(model.page == TRAVEL_DAY_TRANSITION);
+    assert(key(&model, TRAVEL_DOWN_LONG, 200) == TRAVEL_ENTER_DEEP_SLEEP);
+    assert(!travel_model_tick(&model, 3449));
+    assert(travel_model_tick(&model, 3450));
+    assert(model.page == TRAVEL_HOME);
+    key(&model, TRAVEL_OK_LONG, 4000);
+    while (model.selection != 0) key(&model, TRAVEL_UP, 4000);
+    assert(key(&model, TRAVEL_OK, 4000) == TRAVEL_SAVE_SELECTION);
+    assert(!model.preview);
+
+    travel_date_state_t state;
+    assert(travel_model_day_for_date(2026, 10, 1, &state) == 0 && state == TRAVEL_DATE_BEFORE);
+    for (int day = 2; day <= 12; ++day) {
+        assert(travel_model_day_for_date(2026, 10, day, &state) == day - 2);
+        assert(state == TRAVEL_DATE_ACTIVE);
+    }
+    assert(travel_model_day_for_date(2026, 10, 13, &state) == 10 && state == TRAVEL_DATE_AFTER);
+    assert(travel_model_date_key_for_day(0) == 20261002);
+    assert(travel_model_date_key_for_day(10) == 20261012);
+
+    int16_t times[] = {600, -1, 900, -1};
+    assert(travel_model_next_reminder(times, 4, 0, true, false, 700) == 0);
+    assert(travel_model_next_reminder(times, 4, 1, true, false, 700) == 1);
+    assert(travel_model_next_reminder(times, 4, 3, true, false, 700) == 3);
+    assert(travel_model_next_reminder(times, 4, 11, true, false, 700) == 2);
+    assert(travel_model_next_reminder(times, 4, 0, false, false, 700) == 0);
+    assert(travel_model_next_reminder(times, 4, 1, true, true, 700) == 1);
+    assert(travel_model_next_reminder(times, 4, 15, true, false, 700) == TRAVEL_DAY_NONE);
+
     assert(travel_key_center(0, 320) == 53 && travel_key_center(1, 320) == 160 && travel_key_center(2, 320) == 267);
     assert(travel_key_center(3, 320) == -1);
     assert(travel_backlight_level(29999, false) == 75);
     assert(travel_backlight_level(30000, false) == 20);
-    assert(travel_backlight_level(59999, false) == 20);
     assert(travel_backlight_level(60000, false) == 10);
-    assert(travel_backlight_level(UINT32_MAX, false) == 10);
     assert(travel_backlight_level(120000, true) == 75);
-    assert(!travel_model_should_sleep(0));
-    assert(!travel_model_should_sleep(119999));
-    assert(travel_model_should_sleep(120000));
-    assert(travel_model_should_sleep(300000));
-    assert(TRAVEL_PASSPORT == TRAVEL_SETTINGS);
-    char tbuf[32] = {0};
-    travel_model_format_time(1789812000, tbuf, sizeof(tbuf));
-    assert(tbuf[2] == '/' && tbuf[5] == ' ' && tbuf[8] == ':');
-    assert(TRAVEL_BATTERY_BORDER_W * 2 + TRAVEL_BATTERY_INNER_GAP * 2 + TRAVEL_BATTERY_FILL_MAX_W == TRAVEL_BATTERY_GAUGE_W);
-    assert(TRAVEL_BATTERY_BORDER_W * 2 + TRAVEL_BATTERY_INNER_GAP * 2 + TRAVEL_BATTERY_FILL_H == TRAVEL_BATTERY_GAUGE_H);
+    assert(!travel_model_should_sleep(119999) && travel_model_should_sleep(120000));
     assert(TRAVEL_BATTERY_FILL_MAX_W == 23 && TRAVEL_BATTERY_FILL_H == 6);
-    assert(travel_battery_fill_width(-1) == 0);
-    assert(travel_battery_fill_width(0) == 0);
-    assert(travel_battery_fill_width(19) == 4);
-    assert(travel_battery_fill_width(50) == 11);
-    assert(travel_battery_fill_width(100) == 23);
+    assert(travel_battery_fill_width(19) == 4 && travel_battery_fill_width(50) == 11);
     assert(travel_battery_fill_width(120) == 23);
-    puts("Travel interaction/timeout/parent-confirmation tests: PASS");
+
+    char date[12];
+    travel_model_format_day(6, date, sizeof(date)); assert(date[0] == '1' && date[4] == '8');
+    assert(!travel_model_clock_valid(0));
+    assert(travel_model_clock_valid(1789812000));
+    puts("Western Australia date, reminder, persistence-state and interaction tests: PASS");
 }

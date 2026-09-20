@@ -48,17 +48,17 @@ Store reusable music and sound-effect sources in `music/`.
 | --- | --- |
 | `images/koala-sprite-source.png`, `images/koala-{wave,nod,point,walk}-source.png` | Approved transparent artwork for the red, unmarked baseball-cap koala. The four motion sources are 2 × 2 sheets generated with the built-in image tool from the user's approved character; no third-party redistribution license is asserted. |
 | `images/koala_frames.bin`, `images/koala_frames.bin.manifest.json` | Deterministic 20-frame, 144 × 144 RGB565A8 atlas embedded read-only in firmware: wave 0–3, nod 4–7, point right 8–11, mirrored point left 12–15, and walk 16–19. |
-| `packs/shanghai/background.png` | Generated Shanghai illustration, converted to 240 × 320 little-endian RGB565. |
+| `packs/western-australia/{perth-night,dunes-pinnacles,pink-lake-gorge,fremantle-rottnest,wildlife-city-sunset}.png` | Five original bright storybook illustrations generated with the built-in image tool for this fixed itinerary; they do not reuse the PDF photographs. The packer deduplicates their eleven-day use and converts them to 240 × 320 little-endian RGB565. |
 | `fonts/NotoSansSC-SemiBold.ttf`, `fonts/OFL.txt` | [Google Fonts Noto Sans SC](https://github.com/google/fonts/tree/main/ofl/notosanssc), SIL Open Font License 1.1; static weight 600 derived from the original variable font with fontTools. Only the static source needed by the converters is retained. |
-| `fonts/ui-24.txt`, `fonts/travel_ui_font_24.c`, `fonts/travel_ui_font_36.c` | System Chinese inventory plus printable ASCII at 24 px; fixed parent headings at 36 px. Semibold, 2 bits/pixel, no compression or kerning. |
-| `packs/shanghai/cards.json`, `cards.klp`, `cards.klp.manifest.json` | Authoring text, complete content pack, and SHA-256 identity. The exact 28/36 px font subsets are included inside the pack and load through LVGL's memory filesystem; temporary conversion files are removed automatically. |
+| `fonts/ui-24.txt`, `fonts/travel_ui_font_24.c`, `fonts/travel_ui_font_36.c` | Fixed system and itinerary character inventory at 26 px. Noto Sans SC SemiBold, 2 bits/pixel, no compression or kerning; compiled into firmware to avoid runtime binary-font parsing. |
+| `packs/western-australia/cards.json`, `cards.klp`, `cards.klp.manifest.json` | Eleven-day authoring text, the five-background content pack, and SHA-256 identity. Text is validated against real 26 px glyph advances; the pack contains six files and stays below the 1 MiB partition limit. |
 
 Reproduction uses Pillow 11.3.0, fontTools 4.60.1, and `lv_font_conv` 1.5.3:
 
 ```text
 python tools/prepare_travel_assets.py --converter /path/to/lv_font_conv/lv_font_conv.js
 python tools/pack_koala_frames.py verify
-python tools/pack_cards.py build assets/packs/shanghai/cards.json assets/packs/shanghai/cards.klp --converter /path/to/lv_font_conv/lv_font_conv.js
+python tools/pack_cards.py build assets/packs/western-australia/cards.json assets/packs/western-australia/cards.klp
 ```
 
 Art instructions are retained in `images/koala-art-prompts.txt`. See the
