@@ -51,6 +51,10 @@ static void save_frame(const char *directory, const char *name) {
     }
     fclose(fp);
 }
+static void advance_animation(uint32_t milliseconds) {
+    lv_tick_inc(milliseconds);
+    lv_timer_handler();
+}
 int main(int argc, char **argv) {
     assert(argc == 3);
     FILE *fp = fopen(argv[1], "rb"); assert(fp); fseek(fp, 0, SEEK_END);
@@ -72,6 +76,11 @@ int main(int argc, char **argv) {
     travel_stamp_record_t stamps = {.mask = 1, .timestamps = {1720000000, 0, 0, 0}};
     travel_custom_schedule_t custom = {0};
     travel_ui_refresh(&content, &model, net, 82, &stamps, &custom); save_frame(argv[2], "home");
+    travel_ui_play_motion(TRAVEL_MOTION_WAVE); advance_animation(750); save_frame(argv[2], "motion-wave");
+    travel_ui_play_motion(TRAVEL_MOTION_NOD); advance_animation(500); save_frame(argv[2], "motion-nod");
+    travel_ui_play_motion(TRAVEL_MOTION_POINT_RIGHT); advance_animation(500); save_frame(argv[2], "motion-point-right");
+    travel_ui_play_motion(TRAVEL_MOTION_POINT_LEFT); advance_animation(500); save_frame(argv[2], "motion-point-left");
+    travel_ui_play_motion(TRAVEL_MOTION_WALK); advance_animation(600); save_frame(argv[2], "motion-walk");
     const travel_place_t *place = &content.places[0];
     for (size_t i = 0; i < place->task_count; ++i) {
         model.page = TRAVEL_TASK; model.task = i;
@@ -82,7 +91,12 @@ int main(int argc, char **argv) {
     model.page = TRAVEL_PASSPORT; travel_ui_refresh(&content, &model, net, -1, &stamps, &custom); save_frame(argv[2], "passport");
     model.page = TRAVEL_MAINTENANCE; net.state = TRAVEL_NET_CONNECTING;
     travel_ui_refresh(&content, &model, net, 82, &stamps, &custom); save_frame(argv[2], "maintenance");
+    travel_ui_notify_trip_changed();
+    model.page = TRAVEL_HOME; travel_ui_refresh(&content, &model, net, 82, &stamps, &custom);
+    save_frame(argv[2], "synced-trip-walk");
     model.page = TRAVEL_STAMP_ANIM; travel_ui_refresh(&content, &model, net, 82, &stamps, &custom); save_frame(argv[2], "stamp_anim");
+    model.page = TRAVEL_HOME; travel_ui_refresh(&content, &model, net, 82, &stamps, &custom);
+    save_frame(argv[2], "stamp-success-nod");
     travel_ui_show_sync_success("新行程已就绪");
     for (size_t i = 1; i < content.place_count; ++i) {
         model.place = i; model.page = TRAVEL_HOME;

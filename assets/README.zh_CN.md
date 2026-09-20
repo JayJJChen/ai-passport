@@ -44,7 +44,8 @@
 
 | 文件 | 集成方式与来源 |
 | --- | --- |
-| `images/koala-sprite-source.png`、`images/koala_sprite.c` | 可编辑透明源图和只读固件中的 144 × 144 RGB565 + alpha 图层。使用内置图像工具参照用户提供的考拉生成，不声称存在第三方再分发许可。 |
+| `images/koala-sprite-source.png`、`images/koala-{wave,nod,point,walk}-source.png` | 已确认的红色无图案鸭舌帽考拉透明原画。四份动作原画均为 2 × 2 图集，由内置图像工具按用户确认的角色生成；不声称存在第三方再分发许可。 |
+| `images/koala_frames.bin`、`images/koala_frames.bin.manifest.json` | 确定性生成、只读嵌入固件的 20 帧 144 × 144 RGB565A8 图集：挥手 0–3、点头 4–7、右指 8–11、镜像左指 12–15、走路 16–19。 |
 | `packs/shanghai/background.png` | 内置工具生成的上海插画，转换为 240 × 320 小端 RGB565。 |
 | `fonts/NotoSansSC-SemiBold.ttf`、`fonts/OFL.txt` | [Google Fonts Noto Sans SC](https://github.com/google/fonts/tree/main/ofl/notosanssc)，SIL Open Font License 1.1；使用 fontTools 从原始可变字体导出字重 600 的静态字体，仅保留转换工具需要的静态源文件。 |
 | `fonts/ui-24.txt`、`fonts/travel_ui_font_24.c`、`fonts/travel_ui_font_36.c` | 系统中文字符与可打印 ASCII 使用 24 px，固定家长页标题使用 36 px。半粗、2 位像素、无压缩和字距调整。 |
@@ -54,6 +55,7 @@
 
 ```text
 python tools/prepare_travel_assets.py --converter /path/to/lv_font_conv/lv_font_conv.js
+python tools/pack_koala_frames.py verify
 python tools/pack_cards.py build assets/packs/shanghai/cards.json assets/packs/shanghai/cards.klp --converter /path/to/lv_font_conv/lv_font_conv.js
 ```
 

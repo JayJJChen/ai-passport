@@ -4,12 +4,18 @@
 LV_FONT_DECLARE(travel_ui_font_24);
 LV_FONT_DECLARE(travel_ui_font_36);
 LV_FONT_DECLARE(lv_font_montserrat_14);
-extern const lv_image_dsc_t koala_sprite;
+extern const uint8_t koala_frames_start[] __asm__("_binary_koala_frames_start");
+extern const uint8_t koala_frames_end[] __asm__("_binary_koala_frames_end");
 static lv_obj_t *s_screen, *s_background, *s_koala, *s_title, *s_dialog, *s_dialog_text;
 static lv_obj_t *s_parent, *s_parent_text, *s_status, *s_hints[3], *s_battery, *s_battery_fill, *s_network;
 static lv_obj_t *s_stamp_box, *s_stamp_inner, *s_stamp_header, *s_stamp_title, *s_stamp_footer;
 static lv_obj_t *s_stamp_info, *s_stamp_time, *s_stamp_page;
 static lv_obj_t *s_time;
+static lv_image_dsc_t s_koala_frames[TRAVEL_KOALA_FRAME_COUNT];
+static travel_animation_t s_animation;
+static travel_motion_tracker_t s_motion_tracker;
+static lv_timer_t *s_animation_timer;
+static bool s_trip_changed;
 static const uint32_t INK = 0x123565, CREAM = 0xfff6df;
 
 static void visible(lv_obj_t *obj, bool show) {
@@ -34,6 +40,52 @@ static lv_obj_t *label(lv_obj_t *parent, const lv_font_t *font, int width) {
     lv_label_set_long_mode(obj, LV_LABEL_LONG_WRAP);
     return obj;
 }
+
+static void set_koala_frame(void) {
+    uint8_t frame = travel_animation_frame(&s_animation);
+    if (frame >= TRAVEL_KOALA_FRAME_COUNT) frame = 0;
+    lv_image_set_src(s_koala, &s_koala_frames[frame]);
+}
+
+static void animation_timer_cb(lv_timer_t *timer) {
+    (void)timer;
+    if (travel_animation_tick(&s_animation, lv_tick_get())) set_koala_frame();
+    if (!travel_animation_active(&s_animation)) lv_timer_pause(s_animation_timer);
+}
+
+void travel_ui_play_motion(travel_motion_t motion) {
+    if (!s_koala || !s_animation_timer) return;
+    travel_animation_start(&s_animation, motion, lv_tick_get());
+    set_koala_frame();
+    if (travel_animation_active(&s_animation)) {
+        lv_timer_reset(s_animation_timer);
+        lv_timer_resume(s_animation_timer);
+    } else {
+        lv_timer_pause(s_animation_timer);
+    }
+}
+
+static void cancel_motion(void) {
+    travel_animation_cancel(&s_animation);
+    if (s_koala) set_koala_frame();
+    if (s_animation_timer) lv_timer_pause(s_animation_timer);
+}
+
+void travel_ui_notify_trip_changed(void) {
+    s_trip_changed = true;
+}
+
+static void update_motion(const travel_model_t *model, bool parent) {
+    travel_motion_t motion = travel_motion_for_state(&s_motion_tracker, model, !parent,
+        s_trip_changed, lv_rand(0, 1) != 0);
+    if (parent) {
+        cancel_motion();
+    } else if (motion != TRAVEL_MOTION_NONE) {
+        if (motion == TRAVEL_MOTION_WALK) s_trip_changed = false;
+        travel_ui_play_motion(motion);
+    }
+}
+
 void travel_ui_create(const travel_content_t *content) {
     s_screen = lv_obj_create(NULL);
     lv_obj_remove_flag(s_screen, LV_OBJ_FLAG_SCROLLABLE);
@@ -41,7 +93,23 @@ void travel_ui_create(const travel_content_t *content) {
     s_background = lv_image_create(s_screen);
     lv_obj_set_pos(s_background, 0, 0);
     s_koala = lv_image_create(s_screen);
-    lv_image_set_src(s_koala, &koala_sprite); lv_obj_set_pos(s_koala, 20, 84);
+    size_t atlas_size = (size_t)(koala_frames_end - koala_frames_start);
+    LV_ASSERT_MSG(atlas_size == TRAVEL_KOALA_FRAME_COUNT * TRAVEL_KOALA_FRAME_BYTES,
+                  "koala frame atlas has an unexpected size");
+    for (size_t i = 0; i < TRAVEL_KOALA_FRAME_COUNT; ++i) {
+        s_koala_frames[i] = (lv_image_dsc_t){
+            .header = {.magic = LV_IMAGE_HEADER_MAGIC, .cf = LV_COLOR_FORMAT_RGB565A8,
+                       .w = TRAVEL_KOALA_FRAME_WIDTH, .h = TRAVEL_KOALA_FRAME_HEIGHT,
+                       .stride = TRAVEL_KOALA_FRAME_WIDTH * 2u},
+            .data_size = TRAVEL_KOALA_FRAME_BYTES,
+            .data = koala_frames_start + i * TRAVEL_KOALA_FRAME_BYTES,
+        };
+    }
+    travel_animation_init(&s_animation);
+    travel_motion_tracker_init(&s_motion_tracker);
+    lv_image_set_src(s_koala, &s_koala_frames[0]); lv_obj_set_pos(s_koala, 20, 84);
+    s_animation_timer = lv_timer_create(animation_timer_cb, 50, NULL);
+    lv_timer_pause(s_animation_timer);
     s_title = label(s_screen, content->title_font, 85); lv_obj_set_pos(s_title, 10, 10);
     lv_obj_set_style_text_align(s_title, LV_TEXT_ALIGN_LEFT, 0);
     s_time = lv_label_create(s_screen);
@@ -75,10 +143,10 @@ void travel_ui_create(const travel_content_t *content) {
     lv_label_set_text(s_stamp_title, "已确认");
     s_stamp_footer = label(s_stamp_box, &lv_font_montserrat_14, 98);
     lv_obj_set_pos(s_stamp_footer, 13, 84);
-    lv_label_set_text(s_stamp_footer, "★ NO. 01 ★");
-    s_stamp_info = label(s_parent, &travel_ui_font_24, 160);
+    lv_label_set_text(s_stamp_footer, "* NO. 01 *");
+    s_stamp_info = label(s_parent, content->body_font, 160);
     lv_obj_set_pos(s_stamp_info, 6, 144);
-    s_stamp_time = label(s_parent, &lv_font_montserrat_14, 160);
+    s_stamp_time = label(s_parent, &travel_ui_font_24, 160);
     lv_obj_set_pos(s_stamp_time, 6, 178);
     s_stamp_page = label(s_parent, &lv_font_montserrat_14, 160);
     lv_obj_set_pos(s_stamp_page, 6, 202);
@@ -97,6 +165,7 @@ void travel_ui_create(const travel_content_t *content) {
     s_battery_fill = panel(s_battery, TRAVEL_BATTERY_INNER_GAP, TRAVEL_BATTERY_INNER_GAP,
                            TRAVEL_BATTERY_FILL_MAX_W, TRAVEL_BATTERY_FILL_H, 0);
     s_network = panel(s_screen, 186, 12, 6, 6, 3);
+    s_trip_changed = false;
     lv_screen_load(s_screen);
 }
 static const char *network_text(travel_net_state_t state) {
@@ -126,6 +195,8 @@ void travel_ui_refresh(const travel_content_t *content, const travel_model_t *mo
     bool in_passport = (model->page == TRAVEL_PASSPORT || model->page == TRAVEL_STAMP_ANIM);
     bool in_maint = (model->page == TRAVEL_MAINTENANCE);
     bool parent = in_passport || in_maint;
+
+    update_motion(model, parent);
 
     visible(s_background, !parent);
     visible(s_koala, !parent);
@@ -170,7 +241,7 @@ void travel_ui_refresh(const travel_content_t *content, const travel_model_t *mo
         lv_label_set_text(s_stamp_title, stamped ? "已确认" : "待探索");
 
         char num_buf[20];
-        snprintf(num_buf, sizeof(num_buf), "★ NO. %02u ★", (unsigned)(idx + 1));
+        snprintf(num_buf, sizeof(num_buf), "* NO. %02u *", (unsigned)(idx + 1));
         lv_label_set_text(s_stamp_footer, num_buf);
 
         lv_label_set_text(s_stamp_info, task_str);
@@ -178,8 +249,10 @@ void travel_ui_refresh(const travel_content_t *content, const travel_model_t *mo
         if (stamped && stamps && stamps->timestamps[idx] > 0) {
             char time_buf[24];
             travel_model_format_time(stamps->timestamps[idx], time_buf, sizeof(time_buf));
+            lv_obj_set_style_text_font(s_stamp_time, &lv_font_montserrat_14, 0);
             lv_label_set_text(s_stamp_time, time_buf);
         } else {
+            lv_obj_set_style_text_font(s_stamp_time, &travel_ui_font_24, 0);
             lv_label_set_text(s_stamp_time, stamped ? "已确认" : "待探索");
         }
 

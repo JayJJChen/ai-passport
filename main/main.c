@@ -142,6 +142,7 @@ static void input_task(void *arg) {
             if (backlight != 75) { bsp_display_backlight(75); backlight = 75; }
             if (event.key == 99 && event.event == 99) {
                 if (bsp_lvgl_lock(200)) {
+                    travel_ui_notify_trip_changed();
                     travel_ui_show_sync_success("新行程已就绪");
                     bsp_lvgl_unlock();
                 }

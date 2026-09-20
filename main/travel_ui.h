@@ -1,4 +1,5 @@
 #pragma once
+#include "travel_animation.h"
 #include "travel_content.h"
 #include "travel_model.h"
 typedef enum { TRAVEL_NET_OFFLINE, TRAVEL_NET_CONNECTING, TRAVEL_NET_CONNECTED,
@@ -12,3 +13,7 @@ void travel_ui_refresh(const travel_content_t *content, const travel_model_t *mo
                        const travel_custom_schedule_t *custom);
 void travel_ui_set_time(const char *time_str);
 void travel_ui_show_sync_success(const char *msg);
+/* Called after a new trip has been accepted; walking starts on the next companion page. */
+void travel_ui_notify_trip_changed(void);
+/* Internal motion entry point, also used by the software renderer. */
+void travel_ui_play_motion(travel_motion_t motion);

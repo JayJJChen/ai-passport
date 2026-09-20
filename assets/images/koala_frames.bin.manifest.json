@@ -1,0 +1,21 @@
+{
+  "format": "RGB565A8",
+  "frame_bytes": 62208,
+  "frame_count": 20,
+  "frame_order": [
+    "wave:0-3",
+    "nod:4-7",
+    "point-right:8-11",
+    "point-left-mirrored:12-15",
+    "walk:16-19"
+  ],
+  "height": 144,
+  "output_sha256": "d92315ff11ff4df336a6188f537e76a84d39e2b075fbbbf5308e55220ae3927d",
+  "sources": {
+    "koala-nod-source.png": "180896619665776e097e10e725ddb2d41393128270433f1547280a6b975c7cba",
+    "koala-point-source.png": "294f45dc96ca7aaabefc465f80b63864f5789c519b52faf8faed74178546a256",
+    "koala-walk-source.png": "1c945ce5647d4d531c16551a7688399cb99c750320036c7595f0c95a241447d7",
+    "koala-wave-source.png": "e8d03aa8a8c937fe3466bbde1c980f1764055bf46e96a63e1286976d94da6601"
+  },
+  "width": 144
+}
