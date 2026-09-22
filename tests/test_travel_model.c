@@ -16,7 +16,7 @@ int main(void) {
 
     travel_saved_state_t saved, loaded;
     travel_saved_state_defaults(&saved);
-    assert(saved.version == TRAVEL_SAVED_STATE_VERSION && saved.last_walk_day == TRAVEL_DAY_NONE);
+    assert(saved.version == TRAVEL_SAVED_STATE_VERSION && saved.last_walk_day == TRAVEL_DAY_NONE && saved.state_revision == 0);
     saved.preview_mode = 1; saved.preview_day = 6; saved.last_walk_day = 5;
     saved.completion.completed[2] = 0x05;
     assert(travel_saved_state_import(&loaded, &saved, sizeof(saved)));
@@ -29,6 +29,15 @@ int main(void) {
     saved.version = TRAVEL_SAVED_STATE_VERSION; saved.completion.completed[0] = 0x80;
     assert(!travel_saved_state_import(&loaded, &saved, sizeof(saved)));
     assert(!travel_saved_state_import(&loaded, &saved, sizeof(saved) - 1));
+    struct {
+        uint32_t version;
+        travel_completion_t completion;
+        uint8_t preview_mode, preview_day, last_walk_day, reserved;
+    } old = {1, {{0}}, 1, 3, 2, 0};
+    old.completion.completed[1] = 0x03;
+    assert(travel_saved_state_import(&loaded, &old, sizeof(old)));
+    assert(loaded.version == TRAVEL_SAVED_STATE_VERSION && loaded.preview_mode == 1 &&
+           loaded.preview_day == 3 && loaded.completion.completed[1] == 0x03 && loaded.state_revision == 0);
     travel_model_init(&model);
 
     key(&model, TRAVEL_UP, 0); assert(model.page == TRAVEL_SCHEDULE && model.schedule == 0);
@@ -53,12 +62,12 @@ int main(void) {
     assert(!travel_model_is_complete(&completion, 2, 2));
 
     model.day = 0; model.preview = false; model.page = TRAVEL_HOME;
-    assert(key(&model, TRAVEL_OK_LONG, 0) == TRAVEL_NO_ACTION);
+    assert(key(&model, TRAVEL_UP_LONG, 0) == TRAVEL_NO_ACTION);
     assert(model.page == TRAVEL_DAY_SELECT && model.selection == 0);
     key(&model, TRAVEL_DOWN, 0); assert(model.selection == 1);
     assert(key(&model, TRAVEL_OK, 0) == TRAVEL_SAVE_SELECTION);
     assert(model.preview && model.day == 0 && model.page == TRAVEL_HOME);
-    key(&model, TRAVEL_OK_LONG, 0); assert(model.selection == 1);
+    key(&model, TRAVEL_UP_LONG, 0); assert(model.selection == 1);
     key(&model, TRAVEL_DOWN, 0); assert(model.selection == 2);
     assert(key(&model, TRAVEL_OK, 100) == TRAVEL_DAY_CHANGED);
     assert(model.preview && model.day == 1 && model.page == TRAVEL_DAY_TRANSITION);
@@ -67,7 +76,7 @@ int main(void) {
     assert(!travel_model_tick(&model, 3449));
     assert(travel_model_tick(&model, 3450));
     assert(model.page == TRAVEL_HOME);
-    key(&model, TRAVEL_OK_LONG, 4000);
+    key(&model, TRAVEL_UP_LONG, 4000);
     while (model.selection != 0) key(&model, TRAVEL_UP, 4000);
     assert(key(&model, TRAVEL_OK, 4000) == TRAVEL_SAVE_SELECTION);
     assert(!model.preview);

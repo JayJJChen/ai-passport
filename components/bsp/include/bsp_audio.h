@@ -6,6 +6,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // 初始化 codec 与 I2S。内部会调 bsp_i2c_init()(幂等),无需外部先调。成功调用可重复；
 // 失败会释放本次已创建的 codec 接口和 I2S channel，修正故障后可重试。
 esp_err_t bsp_audio_init(void);
@@ -44,3 +48,7 @@ esp_err_t bsp_audio_read(void *pcm, size_t bytes);
 
 // 输出音量 0..100(%)。
 void bsp_audio_set_volume(uint8_t percent);
+
+#ifdef __cplusplus
+}
+#endif

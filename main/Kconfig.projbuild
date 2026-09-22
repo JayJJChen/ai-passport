@@ -1,0 +1,22 @@
+menu "Koala voice assistant"
+
+    config KOALA_STATE_SYNC_URL
+        string "Travel state synchronization endpoint"
+        default "http://koala-server.local:8090/v1/device-state"
+        help
+            HTTP endpoint receiving a full travel-state snapshot immediately
+            before each push-to-talk turn.
+
+    config KOALA_STATE_SYNC_TOKEN
+        string "Travel state synchronization bearer token"
+        default ""
+        help
+            Optional shared bearer token. Keep real credentials in a private
+            sdkconfig.defaults.local file, never in source control.
+
+    config KOALA_STATE_SYNC_TIMEOUT_MS
+        int "Travel state synchronization timeout (ms)"
+        range 1000 15000
+        default 5000
+
+endmenu

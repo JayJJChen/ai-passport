@@ -24,7 +24,29 @@ void travel_saved_state_defaults(travel_saved_state_t *state) {
 bool travel_saved_state_import(travel_saved_state_t *state, const void *data, size_t size) {
     if (!state) return false;
     travel_saved_state_defaults(state);
-    if (!data || size != sizeof(*state)) return false;
+    if (!data) return false;
+    typedef struct {
+        uint32_t version;
+        travel_completion_t completion;
+        uint8_t preview_mode;
+        uint8_t preview_day;
+        uint8_t last_walk_day;
+        uint8_t reserved;
+    } travel_saved_state_v1_t;
+    if (size == sizeof(travel_saved_state_v1_t)) {
+        travel_saved_state_v1_t old;
+        memcpy(&old, data, sizeof(old));
+        if (old.version != 1U || old.preview_mode > 1 || old.preview_day >= TRAVEL_MAX_DAYS ||
+            (old.last_walk_day >= TRAVEL_MAX_DAYS && old.last_walk_day != TRAVEL_DAY_NONE)) return false;
+        for (size_t day = 0; day < TRAVEL_MAX_DAYS; ++day)
+            if (old.completion.completed[day] & ~((1u << TRAVEL_MAX_REMINDERS) - 1u)) return false;
+        state->completion = old.completion;
+        state->preview_mode = old.preview_mode;
+        state->preview_day = old.preview_day;
+        state->last_walk_day = old.last_walk_day;
+        return true;
+    }
+    if (size != sizeof(*state)) return false;
     travel_saved_state_t loaded;
     memcpy(&loaded, data, sizeof(loaded));
     if (loaded.version != TRAVEL_SAVED_STATE_VERSION || loaded.preview_mode > 1 ||
@@ -95,10 +117,10 @@ travel_action_t travel_model_input(travel_model_t *m, travel_input_t in,
     if (in == TRAVEL_DOWN_LONG) {
         return TRAVEL_ENTER_DEEP_SLEEP;
     }
-    if (in == TRAVEL_UP_LONG) {
+    if (in == TRAVEL_OK_LONG) {
         return TRAVEL_NO_ACTION;
     }
-    if (in == TRAVEL_OK_LONG) {
+    if (in == TRAVEL_UP_LONG) {
         if (m->page == TRAVEL_DAY_TRANSITION) return TRAVEL_NO_ACTION;
         m->page = TRAVEL_DAY_SELECT;
         m->selection = m->preview ? (uint8_t)(m->day + 1) : 0;

@@ -5,26 +5,43 @@
 `feature/koala-travel` boots directly into a 240 × 320 offline companion for
 the fixed family trip from 2 through 12 October 2026. Eleven days provide a
 route, activity, lodging card, and up to four reminders. Legacy `custom_trip`
-and stamp data remain untouched but are no longer read. The application starts
-no SoftAP, HTTP server, or phone editor.
+and stamp data remain untouched but are no longer read. The travel cards remain
+offline-first; Wi-Fi is used only by the optional push-to-talk assistant.
 
 ## Date and controls
 
 Automatic mode uses Perth's fixed UTC+8 zone. Dates map to Day 1–Day 11; an
 invalid/pre-trip clock previews Day 1, and a post-trip date retains Day 11 with
-"trip complete". Holding OK selects Auto or any itinerary day and persists the
+"trip complete". Holding UP selects Auto or any itinerary day and persists the
 choice. The device has no minute-level clock editor.
 
 - UP cycles route, activity, lodging, then home.
 - DOWN enters or cycles today's reminders.
-- OK completes the visible reminder; elsewhere it returns home.
-- Hold OK opens the date selector; hold DOWN sleeps immediately.
-- Hold UP is intentionally reserved for a future ESP-NOW message entry point.
+- On home, press and hold OK to talk; releasing OK sends the utterance. Pressing
+  OK while the assistant speaks interrupts it and starts a new utterance.
+- Outside home, OK completes the visible reminder or returns home.
+- Hold UP opens the date selector; hold DOWN sleeps immediately.
+- Double-UP on home opens Wi-Fi provisioning.
 
 Home shows the next unfinished reminder. Completion shows a three-second
 acknowledgement, then the next item; finishing the day shows an all-done message.
 Optional `HH:MM` reminder fields affect ordering when the clock is valid, but
 never wake the device, ring, or play audio.
+
+## Wi-Fi and voice
+
+There is no wake word. With no saved network, boot starts a `Koala-*` SoftAP and
+captive portal. With saved credentials, the device retries station mode and
+keeps the travel UI usable offline; it does not force provisioning merely
+because the network is unavailable. Double-UP explicitly re-enters the portal.
+
+Before each utterance the device uploads a full versioned travel-state snapshot.
+The server injects that state and the complete itinerary Markdown into the LLM
+prompt. If state synchronization fails, that voice turn fails rather than using
+stale completion data. The device UI displays only fixed states (configuring,
+syncing, listening, thinking, speaking, error/offline), never arbitrary LLM
+text. ASR and TTS are server responsibilities; the ESP32 transports 16 kHz mono
+Opus and keeps conversation history only for the current WebSocket session.
 
 ## Motion
 
@@ -57,5 +74,6 @@ wave transition frames using production UI code. Add
 `--datetime 2026-10-08T15:30` to inject a simulator time.
 
 Run `./tools/validate.sh` under ESP-IDF 5.5.3. A successful build and software
-render do not prove physical display, buttons, sleep, or animation quality;
-flashing requires separate authorization.
+render do not prove physical display, buttons, Wi-Fi provisioning, microphone,
+speaker, interruption latency, sleep, or animation quality; flashing requires
+separate authorization.

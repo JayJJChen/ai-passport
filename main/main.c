@@ -7,6 +7,8 @@
 #include "travel_content.h"
 #include "travel_model.h"
 #include "travel_ui.h"
+#include "voice_assistant.h"
+#include "voice_wifi.h"
 #include "driver/gpio.h"
 #include "esp_sleep.h"
 #include "esp_partition.h"
@@ -24,6 +26,8 @@
 
 typedef enum {
     APP_EVENT_BUTTON,
+    APP_EVENT_WIFI,
+    APP_EVENT_VOICE_STATUS,
     APP_EVENT_EXTERNAL_MESSAGE,
 } app_event_type_t;
 
@@ -31,6 +35,8 @@ typedef struct {
     app_event_type_t type;
     union {
         struct { bsp_btn_t key; bsp_btn_ev_t event; } button;
+        voice_wifi_state_t wifi;
+        voice_assistant_status_t voice;
         struct { uint8_t kind; uint8_t payload[15]; } external;
     } data;
 } app_event_t;
@@ -44,6 +50,10 @@ static travel_saved_state_t s_state;
 static QueueHandle_t s_input;
 static esp_partition_mmap_handle_t s_pack_map;
 static bool s_battery_ready;
+static voice_wifi_state_t s_wifi_state = VOICE_WIFI_OFFLINE;
+static voice_assistant_status_t s_voice_status = VOICE_ASSISTANT_OFFLINE;
+static bool s_ptt_active;
+static uint32_t s_ignore_ok_click_until;
 
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
@@ -107,9 +117,21 @@ static uint8_t preferred_reminder(time_t now) {
 
 static void on_button(bsp_btn_t key, bsp_btn_ev_t event, void *user) {
     (void)user;
-    if (event != BSP_BTN_CLICK && event != BSP_BTN_LONG) return;
     app_event_t input = {.type = APP_EVENT_BUTTON, .data.button = {key, event}};
     (void)xQueueSend(s_input, &input, 0);
+}
+
+static void on_wifi(voice_wifi_state_t state, void *context) {
+    (void)context;
+    voice_assistant_set_network(state == VOICE_WIFI_ONLINE);
+    app_event_t event = {.type = APP_EVENT_WIFI, .data.wifi = state};
+    (void)xQueueSend(s_input, &event, 0);
+}
+
+static void on_voice_status(voice_assistant_status_t status, void *context) {
+    (void)context;
+    app_event_t event = {.type = APP_EVENT_VOICE_STATUS, .data.voice = status};
+    (void)xQueueSend(s_input, &event, 0);
 }
 
 static bool content_load(void) {
@@ -128,6 +150,7 @@ static bool content_load(void) {
 
 static void enter_deep_sleep(void) {
     ESP_LOGI(TAG, "Entering deep sleep, wake on GPIO0 button press");
+    voice_assistant_prepare_sleep();
     if (s_battery_ready) bsp_battery_sleep();
     bsp_audio_sleep();
     bsp_audio_prepare_deep_sleep();
@@ -148,6 +171,54 @@ static void enter_deep_sleep(void) {
     gpio_config(&io_conf);
     esp_deep_sleep_enable_gpio_wakeup(1ULL << GPIO_NUM_0, ESP_GPIO_WAKEUP_GPIO_LOW);
     esp_deep_sleep_start();
+}
+
+static const char *page_name(travel_page_t page) {
+    static const char *names[] = {"home", "schedule", "reminder", "feedback", "day_select", "day_transition"};
+    return (unsigned)page < sizeof(names) / sizeof(names[0]) ? names[page] : "unknown";
+}
+
+static const char *date_state_name(travel_date_state_t state) {
+    static const char *names[] = {"unknown", "before", "active", "after", "preview"};
+    return (unsigned)state < sizeof(names) / sizeof(names[0]) ? names[state] : "unknown";
+}
+
+static voice_state_snapshot_t voice_snapshot(int battery) {
+    voice_state_snapshot_t snapshot = {
+        .state_revision = s_state.state_revision,
+        .current_day = s_model.day,
+        .preview_mode = s_model.preview,
+        .date_state = date_state_name(s_model.date_state),
+        .page = page_name(s_model.page),
+        .current_day_id = s_content.days[s_model.day].id,
+        .next_reminder = preferred_reminder(time(NULL)),
+        .battery_percent = battery,
+        .device_time = (int64_t)time(NULL),
+    };
+    memcpy(snapshot.completion_masks, s_state.completion.completed,
+           sizeof(snapshot.completion_masks));
+    for (size_t day = 0; day < TRAVEL_MAX_DAYS; ++day)
+        snapshot.reminder_counts[day] = (uint8_t)s_content.days[day].reminder_count;
+    return snapshot;
+}
+
+static travel_voice_status_t ui_voice_status(void) {
+    if (s_wifi_state == VOICE_WIFI_CONFIGURING) return TRAVEL_VOICE_CONFIGURING;
+    switch (s_voice_status) {
+    case VOICE_ASSISTANT_READY: return TRAVEL_VOICE_READY;
+    case VOICE_ASSISTANT_SYNCING: return TRAVEL_VOICE_SYNCING;
+    case VOICE_ASSISTANT_LISTENING: return TRAVEL_VOICE_LISTENING;
+    case VOICE_ASSISTANT_THINKING: return TRAVEL_VOICE_THINKING;
+    case VOICE_ASSISTANT_SPEAKING: return TRAVEL_VOICE_SPEAKING;
+    case VOICE_ASSISTANT_ERROR: return TRAVEL_VOICE_ERROR;
+    default: return TRAVEL_VOICE_OFFLINE;
+    }
+}
+
+static bool voice_busy(void) {
+    return s_voice_status == VOICE_ASSISTANT_SYNCING || s_voice_status == VOICE_ASSISTANT_LISTENING ||
+           s_voice_status == VOICE_ASSISTANT_THINKING || s_voice_status == VOICE_ASSISTANT_SPEAKING ||
+           s_wifi_state == VOICE_WIFI_CONFIGURING;
 }
 
 static void save_selection_and_walk(bool day_changed) {
@@ -173,6 +244,27 @@ static void input_task(void *arg) {
             if (event.type == APP_EVENT_BUTTON) {
                 bsp_btn_t key = event.data.button.key;
                 bsp_btn_ev_t key_event = event.data.button.event;
+                if (key == BSP_BTN_OK && key_event == BSP_BTN_PRESS && s_model.page == TRAVEL_HOME) {
+                    voice_state_snapshot_t snapshot = voice_snapshot(battery);
+                    s_ptt_active = voice_assistant_begin(&snapshot);
+                    redraw = true;
+                    continue;
+                }
+                if (key == BSP_BTN_OK && key_event == BSP_BTN_RELEASE && s_model.page == TRAVEL_HOME) {
+                    if (s_ptt_active) voice_assistant_end();
+                    s_ptt_active = false;
+                    s_ignore_ok_click_until = now_ms() + 600;
+                    redraw = true;
+                    continue;
+                }
+                if (key == BSP_BTN_UP && key_event == BSP_BTN_DOUBLE && s_model.page == TRAVEL_HOME) {
+                    voice_wifi_start_configuration();
+                    redraw = true;
+                    continue;
+                }
+                if (key_event != BSP_BTN_CLICK && key_event != BSP_BTN_LONG) continue;
+                if (key == BSP_BTN_OK && key_event == BSP_BTN_CLICK &&
+                    (int32_t)(s_ignore_ok_click_until - now_ms()) >= 0) continue;
                 travel_input_t input = key_event == BSP_BTN_LONG ?
                     (key == BSP_BTN_UP ? TRAVEL_UP_LONG : key == BSP_BTN_DOWN ? TRAVEL_DOWN_LONG : TRAVEL_OK_LONG) :
                     (key == BSP_BTN_UP ? TRAVEL_UP : key == BSP_BTN_DOWN ? TRAVEL_DOWN : TRAVEL_OK);
@@ -184,14 +276,21 @@ static void input_task(void *arg) {
                 travel_action_t action = travel_model_input(&s_model, input,
                     TRAVEL_SCHEDULE_CARD_COUNT, day->reminder_count, now_ms());
                 if (action == TRAVEL_COMPLETE_REMINDER) {
-                    travel_model_complete(&s_model, &s_state.completion);
+                    if (travel_model_complete(&s_model, &s_state.completion)) s_state.state_revision++;
                     state_save();
                 } else if (action == TRAVEL_SAVE_SELECTION || action == TRAVEL_DAY_CHANGED) {
+                    s_state.state_revision++;
                     save_selection_and_walk(action == TRAVEL_DAY_CHANGED);
                     if (!s_model.preview) redraw |= apply_automatic_date(time(NULL), true);
                 } else if (action == TRAVEL_ENTER_DEEP_SLEEP) {
                     enter_deep_sleep();
                 }
+                redraw = true;
+            } else if (event.type == APP_EVENT_WIFI) {
+                s_wifi_state = event.data.wifi;
+                redraw = true;
+            } else if (event.type == APP_EVENT_VOICE_STATUS) {
+                s_voice_status = event.data.voice;
                 redraw = true;
             } else {
                 /* Reserved for a future ESP-NOW message source. */
@@ -201,9 +300,10 @@ static void input_task(void *arg) {
 
         uint32_t now = now_ms();
         redraw |= travel_model_tick(&s_model, now);
-        unsigned next_backlight = travel_backlight_level((uint32_t)(now - last_input), false);
+        bool busy = voice_busy();
+        unsigned next_backlight = travel_backlight_level((uint32_t)(now - last_input), busy);
         if (next_backlight != backlight) { bsp_display_backlight(next_backlight); backlight = next_backlight; }
-        if (travel_model_should_sleep((uint32_t)(now - last_input))) enter_deep_sleep();
+        if (!busy && travel_model_should_sleep((uint32_t)(now - last_input))) enter_deep_sleep();
 
         time_t current = time(NULL);
         if (current / 60 != last_minute / 60) {
@@ -218,6 +318,7 @@ static void input_task(void *arg) {
             battery_time = now;
         }
         if (redraw && bsp_lvgl_lock(200)) {
+            travel_ui_set_voice_status(ui_voice_status());
             struct tm local;
             int minute = 0;
             bool valid = current_perth_time(current, &local, &minute);
@@ -275,8 +376,17 @@ void app_main(void) {
         return;
     }
     if (bsp_button_init(on_button, NULL) != ESP_OK) ESP_LOGE(TAG, "Buttons unavailable; homepage remains visible");
+    esp_err_t wifi_result = voice_wifi_init(on_wifi, NULL);
+    if (wifi_result != ESP_OK) ESP_LOGE(TAG, "Wi-Fi unavailable: %s", esp_err_to_name(wifi_result));
+    esp_err_t voice_result = voice_assistant_init(on_voice_status, NULL);
+    if (voice_result != ESP_OK) {
+        ESP_LOGE(TAG, "Voice assistant unavailable: %s", esp_err_to_name(voice_result));
+    } else if (wifi_result == ESP_OK && voice_wifi_is_connected()) {
+        /* A very fast station connection may precede voice initialization. */
+        voice_assistant_set_network(true);
+    }
     ESP_LOGI(TAG, "UI ready: free heap=%u, largest block=%u",
         (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
-    ESP_LOGI(TAG, "Ready: UP=schedule, DOWN=reminders, OK=complete/return, hold OK=date, hold DOWN=sleep");
+    ESP_LOGI(TAG, "Ready: UP=schedule, DOWN=reminders, hold OK=talk, hold UP=date, double UP=Wi-Fi, hold DOWN=sleep");
 }

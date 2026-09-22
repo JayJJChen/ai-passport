@@ -36,7 +36,7 @@ typedef enum {
 #define TRAVEL_FEEDBACK_MS 3000U
 #define TRAVEL_TRANSITION_MS 3350U
 #define TRAVEL_DAY_NONE 0xffU
-#define TRAVEL_SAVED_STATE_VERSION 1U
+#define TRAVEL_SAVED_STATE_VERSION 2U
 
 typedef struct {
     uint8_t completed[TRAVEL_MAX_DAYS];
@@ -49,6 +49,7 @@ typedef struct {
     uint8_t preview_day;
     uint8_t last_walk_day;
     uint8_t reserved;
+    uint32_t state_revision;
 } travel_saved_state_t;
 
 typedef enum {

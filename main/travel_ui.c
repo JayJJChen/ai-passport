@@ -13,6 +13,7 @@ static lv_image_dsc_t s_koala_frames[TRAVEL_KOALA_FRAME_COUNT];
 static travel_animation_t s_animation;
 static travel_motion_tracker_t s_motion_tracker;
 static lv_timer_t *s_animation_timer;
+static travel_voice_status_t s_voice_status = TRAVEL_VOICE_OFFLINE;
 static const uint32_t INK = 0x123565, CREAM = 0xfff6df;
 
 static void visible(lv_obj_t *obj, bool show) {
@@ -141,6 +142,10 @@ void travel_ui_create(const travel_content_t *content) {
     lv_screen_load(s_screen);
 }
 
+void travel_ui_set_voice_status(travel_voice_status_t status) {
+    s_voice_status = status;
+}
+
 
 static uint8_t preferred_reminder(const travel_day_t *day, const travel_model_t *model,
                                   const travel_completion_t *completion,
@@ -172,7 +177,7 @@ void travel_ui_refresh(const travel_content_t *content, const travel_model_t *mo
     visible(s_selector, selector);
     lv_image_set_src(s_background, &day->background);
 
-    const char *hints[3] = {"今天", "提醒", ""};
+    const char *hints[3] = {"今天", "提醒", "对话"};
     const char *mode = "";
     if (model->date_state == TRAVEL_DATE_PREVIEW || model->date_state == TRAVEL_DATE_BEFORE ||
         model->date_state == TRAVEL_DATE_UNKNOWN) mode = "预览";
@@ -200,6 +205,24 @@ void travel_ui_refresh(const travel_content_t *content, const travel_model_t *mo
         uint8_t reminder = preferred_reminder(day, model, completion, current_minute, clock_valid);
         if (model->page == TRAVEL_HOME) {
             text = reminder == TRAVEL_DAY_NONE ? "今天事项\n都完成啦" : day->reminders[reminder].text;
+            switch (s_voice_status) {
+            case TRAVEL_VOICE_CONFIGURING:
+                text = "手机连接热点\n打开配网页面"; mode = "配网"; break;
+            case TRAVEL_VOICE_SYNCING:
+                text = "连接语音\n请稍候"; mode = "语音"; break;
+            case TRAVEL_VOICE_LISTENING:
+                text = "请说话\n松开发送"; mode = "语音"; break;
+            case TRAVEL_VOICE_THINKING:
+                text = "正在思考\n请稍候"; mode = "语音"; break;
+            case TRAVEL_VOICE_SPEAKING:
+                text = "正在回答\n按住可打断"; mode = "语音"; break;
+            case TRAVEL_VOICE_ERROR:
+                text = "语音暂不可用\n稍后再试"; mode = "离线"; break;
+            case TRAVEL_VOICE_OFFLINE:
+                mode = "离线"; break;
+            case TRAVEL_VOICE_READY:
+                break;
+            }
         } else if (model->page == TRAVEL_SCHEDULE) {
             text = day->schedule[model->schedule % TRAVEL_SCHEDULE_CARD_COUNT];
             static const char *kinds[] = {"路线", "活动", "住宿"};
