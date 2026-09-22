@@ -30,8 +30,9 @@ bool travel_text_check(const char *text, const lv_font_t *font, unsigned max_pix
         if (c < 32 || c == UINT32_MAX) return false;
         lv_font_glyph_dsc_t glyph = {0};
         if (!lv_font_get_glyph_dsc(font, &glyph, c, 0) || glyph.is_placeholder) return false;
+        /* LVGL 9 returns pixel advances; only the stored fmt_txt glyph uses 1/16 px. */
         width += glyph.adv_w;
-        if (width > max_pixels * 16U) return false;
+        if (width > max_pixels) return false;
     }
     return width != 0;
 }

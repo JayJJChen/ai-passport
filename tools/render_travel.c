@@ -190,7 +190,17 @@ int main(int argc, char **argv) {
     assert(content.day_count == TRAVEL_MAX_DAYS);
     assert(!travel_text_check("龘", content.body_font, TRAVEL_BODY_MAX_PX, 2));
     assert(!travel_text_check("\xc0\xaf", content.body_font, TRAVEL_BODY_MAX_PX, 2));
-    assert(!travel_text_check("字字字字字字字", content.body_font, TRAVEL_BODY_MAX_PX, 2));
+    lv_font_glyph_dsc_t boundary_glyph = {0};
+    assert(lv_font_get_glyph_dsc(content.body_font, &boundary_glyph, 0x4eca, 0)); /* 今 is in the actual subset. */
+    assert(!boundary_glyph.is_placeholder && boundary_glyph.adv_w > 0);
+    unsigned six_glyph_pixels = 6u * boundary_glyph.adv_w;
+    assert(six_glyph_pixels <= TRAVEL_BODY_MAX_PX && 7u * boundary_glyph.adv_w > TRAVEL_BODY_MAX_PX);
+    assert(travel_text_check("今今今今今今", content.body_font, six_glyph_pixels, 1));
+    assert(!travel_text_check("今今今今今今", content.body_font, six_glyph_pixels - 1, 1));
+    assert(travel_text_check("今今今今今今\n今今今今今今", content.body_font, six_glyph_pixels, 2));
+    assert(!travel_text_check("今今今今今今今", content.body_font, TRAVEL_BODY_MAX_PX, 2));
+    printf("Production text-width boundary: PASS, six present glyphs=%u px, limit=%u px\n",
+           six_glyph_pixels, TRAVEL_BODY_MAX_PX);
 
     travel_model_t model;
     travel_progress_t progress;
@@ -236,7 +246,9 @@ int main(int argc, char **argv) {
     advance_animation(250);
     save_frame(argv[2], "transition-wave");
 
-    model.day = 7;
+    model.day = (uint8_t)travel_model_day_for_date(2026, 10, 9, &model.date_state);
+    model.preview = false;
+    assert(model.day == 7 && model.date_state == TRAVEL_DATE_ACTIVE);
     assert(content.days[7].compact_companion);
     model.page = TRAVEL_DAY_TRANSITION;
     travel_ui_refresh(&content, &model, &progress, 82, minute, true);
@@ -252,6 +264,9 @@ int main(int argc, char **argv) {
         snprintf(name, sizeof(name), "quokka-voice-%u", status); save_frame(argv[2], name);
     }
     travel_ui_set_voice_status(TRAVEL_VOICE_READY);
+    model.page = TRAVEL_HOME;
+    refresh_static(&content, &model, &progress, minute, true);
+    save_frame(argv[2], "quokka-oct09-active-ready");
     model.page = TRAVEL_REMINDER; model.reminder = 0;
     int entry = travel_progress_find(&progress, content.days[7].activities[0].id);
     travel_progress_entry_t *p = &progress.entries[entry];
