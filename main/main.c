@@ -208,13 +208,8 @@ static void input_task(void *arg) {
         time_t current = time(NULL);
         if (current / 60 != last_minute / 60) {
             last_minute = current;
-            redraw |= apply_automatic_date(current, true);
-            char date[12];
-            travel_model_format_day(s_model.day, date, sizeof(date));
-            if (bsp_lvgl_lock(100)) {
-                travel_ui_set_time(date);
-                bsp_lvgl_unlock();
-            }
+            redraw = true;
+            (void)apply_automatic_date(current, true);
         }
         if ((uint32_t)(now - battery_time) >= 30000) {
             int fresh = s_battery_ready ? bsp_battery_soc() : -1;
@@ -270,9 +265,6 @@ void app_main(void) {
     int minute = 0;
     bool clock_valid = current_perth_time(time(NULL), &local, &minute);
     travel_ui_refresh(&s_content, &s_model, &s_state.completion, -1, minute, clock_valid);
-    char date[12];
-    travel_model_format_day(s_model.day, date, sizeof(date));
-    travel_ui_set_time(date);
     bsp_lvgl_unlock();
     bsp_display_backlight(75);
 

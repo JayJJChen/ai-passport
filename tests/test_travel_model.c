@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static travel_action_t key(travel_model_t *m, travel_input_t input, uint32_t now) {
     return travel_model_input(m, input, TRAVEL_SCHEDULE_CARD_COUNT, 4, now);
@@ -101,8 +102,16 @@ int main(void) {
     assert(travel_battery_fill_width(19) == 4 && travel_battery_fill_width(50) == 11);
     assert(travel_battery_fill_width(120) == 23);
 
-    char date[12];
-    travel_model_format_day(6, date, sizeof(date)); assert(date[0] == '1' && date[4] == '8');
+    char date[12], time_text[12];
+    travel_model_format_day(6, date, sizeof(date)); assert(strcmp(date, "10/08") == 0);
+    travel_model_format_time(15 * 60 + 30, true, time_text, sizeof(time_text));
+    assert(strcmp(time_text, "15:30") == 0);
+    travel_model_format_time(23 * 60 + 59, true, time_text, sizeof(time_text));
+    assert(strcmp(time_text, "23:59") == 0);
+    travel_model_format_time(15 * 60 + 30, false, time_text, sizeof(time_text));
+    assert(strcmp(time_text, "--:--") == 0);
+    travel_model_format_time(24 * 60, true, time_text, sizeof(time_text));
+    assert(strcmp(time_text, "--:--") == 0);
     assert(!travel_model_clock_valid(0));
     assert(travel_model_clock_valid(1789812000));
     puts("Western Australia date, reminder, persistence-state and interaction tests: PASS");

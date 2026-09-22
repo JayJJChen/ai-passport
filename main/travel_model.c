@@ -65,11 +65,13 @@ unsigned travel_backlight_level(uint32_t idle_ms, bool pairing) {
 bool travel_model_should_sleep(uint32_t idle_ms) {
     return idle_ms >= 120000;
 }
-void travel_model_format_time(time_t t, char *buf, size_t len) {
+void travel_model_format_time(int minute_of_day, bool clock_valid, char *buf, size_t len) {
     if (!buf || len == 0) return;
-    struct tm tm;
-    localtime_r(&t, &tm);
-    snprintf(buf, len, "%02d/%02d %02d:%02d", tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min);
+    if (!clock_valid || minute_of_day < 0 || minute_of_day >= 24 * 60) {
+        snprintf(buf, len, "--:--");
+        return;
+    }
+    snprintf(buf, len, "%02d:%02d", minute_of_day / 60, minute_of_day % 60);
 }
 int travel_battery_fill_width(int soc) {
     if (soc <= 0) return 0;

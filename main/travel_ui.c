@@ -6,7 +6,7 @@ LV_FONT_DECLARE(lv_font_montserrat_14);
 extern const uint8_t koala_frames_start[] __asm__("_binary_koala_frames_start");
 extern const uint8_t koala_frames_end[] __asm__("_binary_koala_frames_end");
 
-static lv_obj_t *s_screen, *s_background, *s_koala, *s_title, *s_time, *s_mode;
+static lv_obj_t *s_screen, *s_background, *s_koala, *s_title, *s_time, *s_date, *s_mode;
 static lv_obj_t *s_dialog, *s_dialog_text, *s_selector, *s_selector_text, *s_hints[3];
 static lv_obj_t *s_battery, *s_battery_fill;
 static lv_image_dsc_t s_koala_frames[TRAVEL_KOALA_FRAME_COUNT];
@@ -106,13 +106,16 @@ void travel_ui_create(const travel_content_t *content) {
     lv_timer_pause(s_animation_timer);
 
     s_title = label(s_screen, content->title_font, 108);
-    lv_obj_set_pos(s_title, 16, 12);
+    lv_obj_set_pos(s_title, 16, 28);
     lv_obj_set_style_text_align(s_title, LV_TEXT_ALIGN_LEFT, 0);
-    s_time = label(s_screen, &lv_font_montserrat_14, 58);
-    lv_obj_set_pos(s_time, 128, 8);
+    s_time = label(s_screen, &lv_font_montserrat_14, 46);
+    lv_obj_set_pos(s_time, 78, 6);
     lv_obj_set_style_text_align(s_time, LV_TEXT_ALIGN_RIGHT, 0);
-    s_mode = label(s_screen, content->body_font, 58);
-    lv_obj_set_pos(s_mode, 128, 25);
+    s_date = label(s_screen, &lv_font_montserrat_14, 56);
+    lv_obj_set_pos(s_date, 130, 6);
+    lv_obj_set_style_text_align(s_date, LV_TEXT_ALIGN_RIGHT, 0);
+    s_mode = label(s_screen, content->body_font, 56);
+    lv_obj_set_pos(s_mode, 128, 36);
     lv_obj_set_style_text_align(s_mode, LV_TEXT_ALIGN_RIGHT, 0);
 
     s_dialog = panel(s_screen, 8, 230, 180, 82, 20);
@@ -138,9 +141,6 @@ void travel_ui_create(const travel_content_t *content) {
     lv_screen_load(s_screen);
 }
 
-void travel_ui_set_time(const char *time_str) {
-    if (s_time && time_str) lv_label_set_text(s_time, time_str);
-}
 
 static uint8_t preferred_reminder(const travel_day_t *day, const travel_model_t *model,
                                   const travel_completion_t *completion,
@@ -160,6 +160,11 @@ void travel_ui_refresh(const travel_content_t *content, const travel_model_t *mo
     const travel_day_t *day = &content->days[day_index];
     bool selector = model->page == TRAVEL_DAY_SELECT;
     update_motion(model, selector);
+    char time_text[6], date[6];
+    travel_model_format_time(current_minute, clock_valid, time_text, sizeof(time_text));
+    travel_model_format_day(day_index, date, sizeof(date));
+    lv_label_set_text(s_time, time_text);
+    lv_label_set_text(s_date, date);
 
     visible(s_background, !selector);
     visible(s_koala, !selector);

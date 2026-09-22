@@ -88,9 +88,7 @@ static bool parse_datetime(const char *value, int *year, int *month, int *day, i
 
 static void render_day(const char *output, const travel_content_t *content, travel_model_t *model,
                        travel_completion_t *completion, int minute, bool clock_valid) {
-    char date[12], name[64];
-    travel_model_format_day(model->day, date, sizeof(date));
-    travel_ui_set_time(date);
+    char name[64];
     model->page = TRAVEL_HOME;
     memset(completion, 0, sizeof(*completion));
     refresh_static(content, model, completion, minute, clock_valid);
@@ -173,7 +171,6 @@ int main(int argc, char **argv) {
     }
 
     model.preview = false;
-    model.day = 0;
     model.page = TRAVEL_DAY_SELECT;
     model.selection = 0;
     refresh_static(&content, &model, &completion, minute, true);

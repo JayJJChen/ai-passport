@@ -93,8 +93,8 @@ int travel_key_center(unsigned key, int height);
 unsigned travel_backlight_level(uint32_t idle_ms, bool pairing);
 /* Automatic sleep predicate: deep sleep after 2 minutes of inactivity. */
 bool travel_model_should_sleep(uint32_t idle_ms);
-/* Format timestamp into "MM/DD HH:MM" for top bar display (Perth local time). */
-void travel_model_format_time(time_t t, char *buf, size_t len);
+/* Format a valid minute of day into 24-hour "HH:MM"; otherwise use "--:--". */
+void travel_model_format_time(int minute_of_day, bool clock_valid, char *buf, size_t len);
 
 /* Battery gauge layout geometry (outer dimensions, border, and inner gap) */
 #define TRAVEL_BATTERY_GAUGE_W       29
