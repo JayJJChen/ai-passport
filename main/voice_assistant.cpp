@@ -2,6 +2,10 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
+#include <cmath>
+#include <atomic>
+#include "cJSON.h"
 #include "bsp_audio.h"
 #include "esp_audio_enc.h"
 #include "esp_audio_types.h"
@@ -27,7 +31,7 @@ constexpr int kSampleRate = 16000;
 constexpr int kFrameDurationMs = 60;
 constexpr size_t kPcmSamples = kSampleRate * kFrameDurationMs / 1000;
 constexpr size_t kMaxOpusBytes = 1024;
-constexpr size_t kStatePayloadBytes = 768;
+constexpr size_t kStatePayloadBytes = 896;
 constexpr EventBits_t kNetworkOnline = BIT0;
 constexpr EventBits_t kCapturing = BIT1;
 constexpr EventBits_t kTransportConnected = BIT2;
@@ -35,6 +39,7 @@ constexpr EventBits_t kChannelReady = BIT3;
 constexpr EventBits_t kSendAllowed = BIT4;
 constexpr EventBits_t kDropPlayback = BIT5;
 constexpr EventBits_t kSpeaking = BIT6;
+constexpr EventBits_t kProgressRefresh = BIT7;
 
 struct OpusPacket {
     uint16_t size;
@@ -51,6 +56,7 @@ enum class CommandType : uint8_t {
 
 struct Command {
     CommandType type;
+    uint32_t turn;
     uint16_t payload_size;
     char payload[kStatePayloadBytes];
 };
@@ -74,6 +80,12 @@ voice_assistant_status_callback_t s_status_callback;
 void *s_status_context;
 volatile voice_assistant_status_t s_status = VOICE_ASSISTANT_OFFLINE;
 bool s_event_handler_registered;
+voice_progress_callback_t s_progress_callback;
+void *s_progress_context;
+std::atomic<uint32_t> s_requested_turn{0};
+std::atomic<uint32_t> s_stop_fallback{0};
+uint32_t s_running_turn; /* control worker only */
+bool s_running_listening;
 
 void publish(voice_assistant_status_t status) {
     s_status = status;
@@ -96,6 +108,7 @@ void protocol_event(esp_xiaozhi_chat_event_t event, void *event_data, void *) {
         break;
     case ESP_XIAOZHI_CHAT_EVENT_CHAT_SPEECH_STOPPED:
         xEventGroupClearBits(s_events, kSpeaking);
+        xEventGroupSetBits(s_events, kProgressRefresh);
         if (xEventGroupGetBits(s_events) & kNetworkOnline) publish(VOICE_ASSISTANT_READY);
         break;
     case ESP_XIAOZHI_CHAT_EVENT_CHAT_TTS_STATE: {
@@ -106,11 +119,13 @@ void protocol_event(esp_xiaozhi_chat_event_t event, void *event_data, void *) {
             publish(VOICE_ASSISTANT_SPEAKING);
         } else if (state->state == ESP_XIAOZHI_CHAT_TTS_STATE_STOP) {
             xEventGroupClearBits(s_events, kSpeaking);
+            xEventGroupSetBits(s_events, kProgressRefresh);
             if (xEventGroupGetBits(s_events) & kNetworkOnline) publish(VOICE_ASSISTANT_READY);
         }
         break;
     }
     case ESP_XIAOZHI_CHAT_EVENT_CHAT_ERROR:
+        xEventGroupSetBits(s_events, kProgressRefresh);
         publish(VOICE_ASSISTANT_ERROR);
         break;
     default:
@@ -139,7 +154,7 @@ void system_event(void *, esp_event_base_t, int32_t event_id, void *) {
     case ESP_XIAOZHI_CHAT_EVENT_DISCONNECTED:
     case ESP_XIAOZHI_CHAT_EVENT_SERVER_GOODBYE:
         xEventGroupClearBits(s_events, kTransportConnected | kChannelReady | kSendAllowed | kSpeaking);
-        xEventGroupSetBits(s_events, kDropPlayback);
+        xEventGroupSetBits(s_events, kDropPlayback | kProgressRefresh);
         if (xEventGroupGetBits(s_events) & kNetworkOnline) publish(VOICE_ASSISTANT_ERROR);
         break;
     case ESP_XIAOZHI_CHAT_EVENT_AUDIO_CHANNEL_OPENED:
@@ -229,6 +244,7 @@ esp_err_t initialize_chat() {
 }
 
 void deinitialize_chat() {
+    s_running_listening = false;
     reset_audio_flow();
     if (!s_chat) return;
     (void)esp_xiaozhi_chat_close_audio_channel(s_chat);
@@ -238,42 +254,157 @@ void deinitialize_chat() {
     xEventGroupClearBits(s_events, kTransportConnected);
 }
 
-esp_err_t upload_state(const char *payload, size_t size) {
-    if (!payload || !size || !CONFIG_KOALA_STATE_SYNC_URL[0]) return ESP_ERR_INVALID_ARG;
+struct HttpBody { char *data; size_t used; bool overflow; };
+constexpr size_t kProgressResponseBytes = 6144;
+esp_err_t receive_http(esp_http_client_event_t *event) {
+    auto *body = static_cast<HttpBody *>(event->user_data);
+    if (event->event_id == HTTP_EVENT_ON_DATA && body && event->data_len > 0) {
+        if (body->used + (size_t)event->data_len >= kProgressResponseBytes) { body->overflow = true; return ESP_FAIL; }
+        std::memcpy(body->data + body->used, event->data, event->data_len);
+        body->used += event->data_len; body->data[body->used] = 0;
+    }
+    return ESP_OK;
+}
+bool json_u32(cJSON *value, uint32_t *out) {
+    if (!cJSON_IsNumber(value) || !std::isfinite(value->valuedouble) || value->valuedouble < 0 ||
+        value->valuedouble > UINT32_MAX || std::floor(value->valuedouble) != value->valuedouble) return false;
+    *out = (uint32_t)value->valuedouble; return true;
+}
+const char *json_text(cJSON *object, const char *key) {
+    cJSON *value = cJSON_GetObjectItemCaseSensitive(object, key);
+    return cJSON_IsString(value) ? value->valuestring : nullptr;
+}
+bool parse_progress(cJSON *root, travel_progress_snapshot_t *snapshot) {
+    const char *trip = json_text(root, "trip_id"), *version = json_text(root, "content_version");
+    cJSON *activities = cJSON_GetObjectItemCaseSensitive(root, "activities");
+    int count = cJSON_GetArraySize(activities);
+    if (!trip || std::strcmp(trip, TRAVEL_TRIP_ID) || !version || !*version ||
+        std::strlen(version) >= sizeof(snapshot->content_version) || !cJSON_IsArray(activities) ||
+        count < 1 || count > (int)TRAVEL_ACTIVITY_MAX ||
+        !json_u32(cJSON_GetObjectItemCaseSensitive(root, "progress_revision"), &snapshot->progress_revision)) return false;
+    std::strcpy(snapshot->content_version, version); snapshot->count = (uint8_t)count;
+    for (int i = 0; i < count; ++i) {
+        cJSON *entry = cJSON_GetArrayItem(activities, i);
+        const char *id = json_text(entry, "activity_id"), *status = json_text(entry, "status");
+        if (!id || !*id || std::strlen(id) >= TRAVEL_ACTIVITY_ID_SIZE || !status ||
+            !json_u32(cJSON_GetObjectItemCaseSensitive(entry, "revision"), &snapshot->activities[i].revision)) return false;
+        unsigned value;
+        for (value = 0; value <= TRAVEL_ACTIVITY_SKIPPED; ++value)
+            if (!std::strcmp(status, travel_progress_status_name(value))) break;
+        if (value > TRAVEL_ACTIVITY_SKIPPED) return false;
+        std::strcpy(snapshot->activities[i].activity_id, id); snapshot->activities[i].status = (uint8_t)value;
+    }
+    return true;
+}
+/* One bounded response allocation; cJSON and the body are released before audio starts. */
+esp_err_t http_request(const char *url, esp_http_client_method_t method, const char *payload,
+                       size_t size, int *http_status, cJSON **response) {
+    if (!url || !*url) return ESP_ERR_INVALID_ARG;
+    char *buffer = static_cast<char *>(std::calloc(1, kProgressResponseBytes));
+    if (!buffer) return ESP_ERR_NO_MEM;
+    HttpBody body = {buffer, 0, false};
     esp_http_client_config_t config = {};
-    config.url = CONFIG_KOALA_STATE_SYNC_URL;
-    config.timeout_ms = CONFIG_KOALA_STATE_SYNC_TIMEOUT_MS;
-    config.crt_bundle_attach = esp_crt_bundle_attach;
+    config.url = url; config.timeout_ms = CONFIG_KOALA_STATE_SYNC_TIMEOUT_MS;
+    config.crt_bundle_attach = esp_crt_bundle_attach; config.event_handler = receive_http; config.user_data = &body;
     esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (!client) return ESP_ERR_NO_MEM;
-
+    if (!client) { std::free(buffer); return ESP_ERR_NO_MEM; }
     char device_id[24];
     if (!voice_wifi_device_id(device_id, sizeof(device_id))) {
-        esp_http_client_cleanup(client);
-        return ESP_ERR_INVALID_STATE;
+        esp_http_client_cleanup(client); std::free(buffer); return ESP_ERR_INVALID_STATE;
     }
-    esp_http_client_set_method(client, HTTP_METHOD_PUT);
+    esp_http_client_set_method(client, method);
     esp_http_client_set_header(client, "Content-Type", "application/json");
     esp_http_client_set_header(client, "Device-Id", device_id);
     if (CONFIG_KOALA_STATE_SYNC_TOKEN[0]) {
         char authorization[192];
-        int count = snprintf(authorization, sizeof(authorization), "Bearer %s",
-                             CONFIG_KOALA_STATE_SYNC_TOKEN);
+        int count = snprintf(authorization, sizeof(authorization), "Bearer %s", CONFIG_KOALA_STATE_SYNC_TOKEN);
         if (count <= 0 || (size_t)count >= sizeof(authorization)) {
-            esp_http_client_cleanup(client);
-            return ESP_ERR_INVALID_SIZE;
+            esp_http_client_cleanup(client); std::free(buffer); return ESP_ERR_INVALID_SIZE;
         }
         esp_http_client_set_header(client, "Authorization", authorization);
     }
-    esp_http_client_set_post_field(client, payload, (int)size);
+    if (payload && size) esp_http_client_set_post_field(client, payload, (int)size);
     esp_err_t result = esp_http_client_perform(client);
-    int status = result == ESP_OK ? esp_http_client_get_status_code(client) : 0;
-    esp_http_client_cleanup(client);
-    if (result != ESP_OK) return result;
-    return status >= 200 && status < 300 ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
+    *http_status = result == ESP_OK ? esp_http_client_get_status_code(client) : 0;
+    if (result == ESP_OK && !body.overflow && body.used)
+        *response = cJSON_ParseWithLengthOpts(body.data, body.used + 1, nullptr, true);
+    esp_http_client_cleanup(client); std::free(buffer);
+    if (body.overflow) return ESP_ERR_INVALID_SIZE;
+    return result;
+}
+bool deliver_progress(cJSON *root, voice_progress_request_kind_t kind,
+                      const travel_progress_operation_t *operation = nullptr) {
+    if (!s_progress_callback || !root) return false;
+    auto *snapshot = static_cast<travel_progress_snapshot_t *>(std::calloc(1, sizeof(travel_progress_snapshot_t)));
+    if (!snapshot) return false;
+    bool result = parse_progress(root, snapshot);
+    if (result) {
+        voice_progress_request_t request = {};
+        request.kind = kind; request.snapshot = snapshot;
+        if (operation) request.operation = *operation;
+        result = s_progress_callback(&request, s_progress_context);
+    }
+    std::free(snapshot); return result;
+}
+bool progress_url(char *url, size_t capacity) {
+    const char *base = CONFIG_KOALA_STATE_SYNC_URL;
+    const char *tail = std::strrchr(base, '/');
+    if (!tail || std::strcmp(tail, "/device-state")) return false;
+    int count = snprintf(url, capacity, "%.*s/activity-progress", (int)(tail - base), base);
+    return count > 0 && (size_t)count < capacity;
+}
+void synchronize_progress() {
+    if (!s_progress_callback || !(xEventGroupGetBits(s_events) & kNetworkOnline)) return;
+    char url[384];
+    if (!progress_url(url, sizeof(url))) return;
+    /* Bound one flush to the catalogue size. A failed request remains persisted for reconnect. */
+    for (unsigned i = 0; i < TRAVEL_ACTIVITY_MAX; ++i) {
+        voice_progress_request_t request = {}; request.kind = VOICE_PROGRESS_NEXT;
+        if (!s_progress_callback(&request, s_progress_context) || !request.has_operation) break;
+        const auto &op = request.operation;
+        char payload[384];
+        int length = snprintf(payload, sizeof(payload),
+            "{\"operation_id\":\"%s\",\"activity_id\":\"%s\",\"status\":\"%s\","
+            "\"content_version\":\"%s\",\"expected_activity_revision\":%lu}",
+            op.operation_id, op.activity_id, travel_progress_status_name(op.status), op.content_version,
+            (unsigned long)op.expected_activity_revision);
+        if (length <= 0 || (size_t)length >= sizeof(payload)) break;
+        int status = 0; cJSON *response = nullptr;
+        esp_err_t result = http_request(url, HTTP_METHOD_POST, payload, length, &status, &response);
+        bool applied = false;
+        if (result == ESP_OK && response) {
+            cJSON *snapshot = cJSON_GetObjectItemCaseSensitive(response, "progress");
+            const char *error = json_text(response, "error");
+            const char *receipt = json_text(response, "result");
+            bool accepted_receipt = receipt && (!std::strcmp(receipt, "applied") ||
+                !std::strcmp(receipt, "unchanged") || !std::strcmp(receipt, "duplicate"));
+            if (status == 200 && accepted_receipt && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(response, "ok")))
+                applied = deliver_progress(snapshot, VOICE_PROGRESS_ACK, &op);
+            else if (status == 409 && error && !std::strcmp(error, "activity_revision_conflict"))
+                applied = deliver_progress(snapshot, VOICE_PROGRESS_CONFLICT, &op);
+            else if (status == 409 && error && !std::strcmp(error, "content_version_mismatch"))
+                (void)deliver_progress(snapshot, VOICE_PROGRESS_PAUSE, &op);
+        }
+        cJSON_Delete(response);
+        if (!applied) break;
+    }
+    int status = 0; cJSON *response = nullptr;
+    if (http_request(url, HTTP_METHOD_GET, nullptr, 0, &status, &response) == ESP_OK && status == 200)
+        (void)deliver_progress(response, VOICE_PROGRESS_SNAPSHOT);
+    cJSON_Delete(response);
+}
+esp_err_t upload_state(const char *payload, size_t size) {
+    if (!payload || !size) return ESP_ERR_INVALID_ARG;
+    int status = 0; cJSON *response = nullptr;
+    esp_err_t result = http_request(CONFIG_KOALA_STATE_SYNC_URL, HTTP_METHOD_PUT, payload, size, &status, &response);
+    if (result == ESP_OK && status >= 200 && status < 300 && response)
+        (void)deliver_progress(cJSON_GetObjectItemCaseSensitive(response, "progress"), VOICE_PROGRESS_SNAPSHOT);
+    cJSON_Delete(response);
+    return result != ESP_OK ? result : status >= 200 && status < 300 ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
 }
 
 esp_err_t start_turn(const Command &command) {
+    s_running_listening = false;
     publish(VOICE_ASSISTANT_SYNCING);
     xEventGroupSetBits(s_events, kDropPlayback);
     xQueueReset(s_rx_packets);
@@ -282,6 +413,7 @@ esp_err_t start_turn(const Command &command) {
             s_chat, ESP_XIAOZHI_CHAT_ABORT_SPEAKING_REASON_STOP_LISTENING);
     }
 
+    synchronize_progress();
     esp_err_t result = upload_state(command.payload, command.payload_size);
     if (result == ESP_OK) result = initialize_chat();
     if (result != ESP_OK) return result;
@@ -301,6 +433,7 @@ esp_err_t start_turn(const Command &command) {
     result = esp_xiaozhi_chat_send_start_listening(
         s_chat, ESP_XIAOZHI_CHAT_LISTENING_MODE_MANUAL);
     if (result == ESP_OK) {
+        s_running_listening = true;
         xEventGroupClearBits(s_events, kDropPlayback | kSpeaking);
         xEventGroupSetBits(s_events, kSendAllowed);
         publish(VOICE_ASSISTANT_LISTENING);
@@ -309,21 +442,44 @@ esp_err_t start_turn(const Command &command) {
 }
 
 void stop_turn() {
-    xEventGroupClearBits(s_events, kCapturing);
-    if (!s_chat || !(xEventGroupGetBits(s_events) & kSendAllowed)) return;
-    for (int attempt = 0; attempt < 12 && uxQueueMessagesWaiting(s_tx_packets); ++attempt)
+    /* The release handler already stopped that capture. A newer button press may now be
+     * recording its next turn: an older queued Stop must never clear that capture flag. */
+    if (!s_chat || !s_running_listening) return;
+    for (int attempt = 0; attempt < 12 && s_requested_turn.load() == s_running_turn &&
+         uxQueueMessagesWaiting(s_tx_packets); ++attempt)
         vTaskDelay(pdMS_TO_TICKS(50));
     (void)esp_xiaozhi_chat_send_stop_listening(s_chat);
+    s_running_listening = false;
     xEventGroupClearBits(s_events, kSendAllowed);
     publish(VOICE_ASSISTANT_THINKING);
 }
 
+void complete_pending_stop() {
+    uint32_t pending = s_stop_fallback.load();
+    if (!pending) return;
+    if (pending == s_running_turn) {
+        stop_turn();
+        (void)s_stop_fallback.compare_exchange_strong(pending, 0);
+    } else if (s_running_turn && (int32_t)(s_running_turn - pending) > 0) {
+        /* A newer Start already aborted the old turn. Do not let an old fallback stop it. */
+        (void)s_stop_fallback.compare_exchange_strong(pending, 0);
+    }
+    /* A stop for a Start still in the command queue waits until that Start is processed. */
+}
 void control_task(void *) {
     Command command;
     for (;;) {
-        if (xQueueReceive(s_commands, &command, portMAX_DELAY) != pdTRUE) continue;
+        complete_pending_stop();
+        if (xQueueReceive(s_commands, &command, pdMS_TO_TICKS(100)) != pdTRUE) {
+            if (xEventGroupGetBits(s_events) & kProgressRefresh) {
+                xEventGroupClearBits(s_events, kProgressRefresh);
+                synchronize_progress();
+            }
+            continue;
+        }
         switch (command.type) {
         case CommandType::NetworkUp:
+            synchronize_progress();
             if (!s_chat) {
                 esp_err_t result = initialize_chat();
                 if (result != ESP_OK) ESP_LOGW(TAG, "Voice server pre-connect failed: %s", esp_err_to_name(result));
@@ -335,16 +491,18 @@ void control_task(void *) {
             publish(VOICE_ASSISTANT_OFFLINE);
             break;
         case CommandType::Start: {
+            s_running_turn = command.turn;
             esp_err_t result = start_turn(command);
             if (result != ESP_OK) {
                 ESP_LOGE(TAG, "Unable to start voice turn: %s", esp_err_to_name(result));
                 deinitialize_chat();
                 publish(VOICE_ASSISTANT_ERROR);
+                xEventGroupSetBits(s_events, kProgressRefresh);
             }
             break;
         }
         case CommandType::Stop:
-            stop_turn();
+            if (command.turn == s_running_turn) stop_turn();
             break;
         case CommandType::Suspend:
             deinitialize_chat();
@@ -421,10 +579,11 @@ void playback_task(void *) {
     }
 }
 
-bool enqueue(CommandType type, const char *payload = nullptr, size_t payload_size = 0) {
+bool enqueue(CommandType type, const char *payload = nullptr, size_t payload_size = 0, uint32_t turn = 0) {
     if (!s_commands || payload_size >= kStatePayloadBytes) return false;
     Command command = {};
     command.type = type;
+    command.turn = turn;
     command.payload_size = (uint16_t)payload_size;
     if (payload && payload_size) std::memcpy(command.payload, payload, payload_size);
     return xQueueSend(s_commands, &command, 0) == pdTRUE;
@@ -499,6 +658,8 @@ extern "C" esp_err_t voice_assistant_init(voice_assistant_status_callback_t call
 
 extern "C" void voice_assistant_set_network(bool online) {
     if (!s_events) return;
+    bool was_online = (xEventGroupGetBits(s_events) & kNetworkOnline) != 0;
+    if (was_online == online) return;
     if (online) xEventGroupSetBits(s_events, kNetworkOnline);
     else xEventGroupClearBits(s_events, kNetworkOnline);
     (void)enqueue(online ? CommandType::NetworkUp : CommandType::NetworkDown);
@@ -518,7 +679,9 @@ extern "C" bool voice_assistant_begin(const voice_state_snapshot_t *snapshot) {
     xQueueReset(s_rx_packets);
     xEventGroupSetBits(s_events, kCapturing | kDropPlayback);
     xEventGroupClearBits(s_events, kSendAllowed | kSpeaking);
-    if (!enqueue(CommandType::Start, payload, payload_size)) {
+    uint32_t turn = s_requested_turn.fetch_add(1) + 1;
+    if (!turn) turn = s_requested_turn.fetch_add(1) + 1;
+    if (!enqueue(CommandType::Start, payload, payload_size, turn)) {
         xEventGroupClearBits(s_events, kCapturing);
         return false;
     }
@@ -529,7 +692,8 @@ extern "C" bool voice_assistant_begin(const voice_state_snapshot_t *snapshot) {
 extern "C" void voice_assistant_end(void) {
     if (!s_events || !(xEventGroupGetBits(s_events) & kCapturing)) return;
     xEventGroupClearBits(s_events, kCapturing);
-    (void)enqueue(CommandType::Stop);
+    uint32_t turn = s_requested_turn.load();
+    if (!enqueue(CommandType::Stop, nullptr, 0, turn)) s_stop_fallback.store(turn);
 }
 
 extern "C" void voice_assistant_prepare_sleep(void) {
@@ -542,4 +706,11 @@ extern "C" void voice_assistant_prepare_sleep(void) {
 
 extern "C" voice_assistant_status_t voice_assistant_get_status(void) {
     return s_status;
+}
+
+extern "C" void voice_assistant_set_progress_callback(voice_progress_callback_t callback, void *context) {
+    s_progress_callback = callback; s_progress_context = context;
+}
+extern "C" void voice_assistant_refresh_progress(void) {
+    if (s_events) xEventGroupSetBits(s_events, kProgressRefresh);
 }

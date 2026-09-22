@@ -57,13 +57,16 @@ size_t voice_state_payload_build(const voice_state_snapshot_t *snapshot,
 
     json_writer_t writer = {destination, capacity, 0, true};
     append(&writer, "{\"schema_version\":%u,\"trip_id\":\"western-australia-2026\","
-                    "\"content_version\":\"cards-v2\",\"state_revision\":%lu,"
+                    "\"content_version\":\"wa-child-v1\",\"state_revision\":%lu,"
                     "\"current_day\":%u,\"preview_mode\":%s,\"date_state\":",
            VOICE_STATE_SCHEMA_VERSION, (unsigned long)snapshot->state_revision,
            (unsigned)snapshot->current_day, snapshot->preview_mode ? "true" : "false");
     append_json_string(&writer, snapshot->date_state);
     append(&writer, ",\"page\":");
     append_json_string(&writer, snapshot->page);
+    append(&writer, ",\"progress_revision\":%lu,\"current_activity_id\":", (unsigned long)snapshot->progress_revision);
+    if (snapshot->current_activity_id) append_json_string(&writer, snapshot->current_activity_id);
+    else append(&writer, "null");
     append(&writer, ",\"current_day_id\":");
     append_json_string(&writer, snapshot->current_day_id);
     if (snapshot->next_reminder == VOICE_STATE_NO_REMINDER) {

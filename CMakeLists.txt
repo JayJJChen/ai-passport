@@ -7,4 +7,4 @@ project(FoloToy-AI-Passport)
 # Later card-pack replacements write only this data partition, not the application.
 configure_file("${CMAKE_SOURCE_DIR}/assets/packs/western-australia/cards.klp"
                "${CMAKE_BINARY_DIR}/cards.klp" COPYONLY)
-esptool_py_flash_target_image(flash travel_cards "0x700000" "${CMAKE_BINARY_DIR}/cards.klp")
+esptool_py_flash_target_image(flash travel_cards "0x600000" "${CMAKE_BINARY_DIR}/cards.klp")

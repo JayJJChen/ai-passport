@@ -13,6 +13,8 @@ static lv_image_dsc_t s_koala_frames[TRAVEL_KOALA_FRAME_COUNT];
 static travel_animation_t s_animation;
 static travel_motion_tracker_t s_motion_tracker;
 static lv_timer_t *s_animation_timer;
+static int s_koala_base_x = 20, s_koala_base_y = 84;
+static bool s_compact;
 static travel_voice_status_t s_voice_status = TRAVEL_VOICE_OFFLINE;
 static const uint32_t INK = 0x123565, CREAM = 0xfff6df;
 
@@ -46,7 +48,9 @@ static void set_koala_frame(void) {
     uint8_t frame = travel_animation_frame(&s_animation);
     if (frame >= TRAVEL_KOALA_FRAME_COUNT) frame = 0;
     lv_image_set_src(s_koala, &s_koala_frames[frame]);
-    lv_obj_set_x(s_koala, travel_animation_x(&s_animation));
+    int offset = travel_animation_x(&s_animation) - 20;
+    if (s_compact) offset = offset * 2 / 3;
+    lv_obj_set_pos(s_koala, s_koala_base_x + offset, s_koala_base_y);
 }
 
 static void animation_timer_cb(lv_timer_t *timer) {
@@ -147,24 +151,18 @@ void travel_ui_set_voice_status(travel_voice_status_t status) {
 }
 
 
-static uint8_t preferred_reminder(const travel_day_t *day, const travel_model_t *model,
-                                  const travel_completion_t *completion,
-                                  int current_minute, bool clock_valid) {
-    int16_t minutes[TRAVEL_MAX_REMINDERS] = {-1, -1, -1, -1};
-    for (size_t i = 0; i < day->reminder_count; ++i) minutes[i] = day->reminders[i].minute_of_day;
-    uint8_t mask = completion && model->day < TRAVEL_MAX_DAYS ? completion->completed[model->day] : 0;
-    return travel_model_next_reminder(minutes, day->reminder_count, mask, clock_valid,
-                                      model->preview || model->date_state != TRAVEL_DATE_ACTIVE,
-                                      current_minute);
-}
-
 void travel_ui_refresh(const travel_content_t *content, const travel_model_t *model,
-                       const travel_completion_t *completion, int battery,
+                       const travel_progress_t *progress, int battery,
                        int current_minute, bool clock_valid) {
     size_t day_index = model->day < content->day_count ? model->day : 0;
     const travel_day_t *day = &content->days[day_index];
     bool selector = model->page == TRAVEL_DAY_SELECT;
+    s_compact = day->compact_companion;
+    s_koala_base_x = s_compact ? 8 : 20; s_koala_base_y = s_compact ? 132 : 84;
+    lv_image_set_pivot(s_koala, 0, 0);
+    lv_image_set_scale(s_koala, s_compact ? 171 : 256);
     update_motion(model, selector);
+    set_koala_frame();
     char time_text[6], date[6];
     travel_model_format_time(current_minute, clock_valid, time_text, sizeof(time_text));
     travel_model_format_day(day_index, date, sizeof(date));
@@ -177,7 +175,7 @@ void travel_ui_refresh(const travel_content_t *content, const travel_model_t *mo
     visible(s_selector, selector);
     lv_image_set_src(s_background, &day->background);
 
-    const char *hints[3] = {"今天", "提醒", "对话"};
+    const char *hints[3] = {"今天", "活动", "对话"};
     const char *mode = "";
     if (model->date_state == TRAVEL_DATE_PREVIEW || model->date_state == TRAVEL_DATE_BEFORE ||
         model->date_state == TRAVEL_DATE_UNKNOWN) mode = "预览";
@@ -202,9 +200,8 @@ void travel_ui_refresh(const travel_content_t *content, const travel_model_t *mo
         mode = "";
     } else {
         const char *text = day->home;
-        uint8_t reminder = preferred_reminder(day, model, completion, current_minute, clock_valid);
         if (model->page == TRAVEL_HOME) {
-            text = reminder == TRAVEL_DAY_NONE ? "今天事项\n都完成啦" : day->reminders[reminder].text;
+            text = day->home;
             switch (s_voice_status) {
             case TRAVEL_VOICE_CONFIGURING:
                 text = "手机连接热点\n打开配网页面"; mode = "配网"; break;
@@ -230,13 +227,24 @@ void travel_ui_refresh(const travel_content_t *content, const travel_model_t *mo
             hints[0] = model->schedule + 1 >= TRAVEL_SCHEDULE_CARD_COUNT ? "返回" : "下一";
             hints[2] = "返回";
         } else if (model->page == TRAVEL_REMINDER) {
-            size_t index = model->reminder < day->reminder_count ? model->reminder : 0;
-            text = day->reminders[index].text;
-            mode = "提醒";
-            hints[0] = "今天"; hints[1] = "下一"; hints[2] = "完成";
+            size_t index = model->reminder < day->activity_count ? model->reminder : 0;
+            text = day->activities[index].text;
+            int entry = travel_progress_find(progress, day->activities[index].id);
+            const travel_progress_entry_t *p = entry >= 0 ? &progress->entries[entry] : NULL;
+            mode = p && p->conflict ? "确认" : progress && progress->writes_paused ? "更新" :
+                   p && p->queued ? "待传" : p && p->server.status == TRAVEL_ACTIVITY_COMPLETED ? "已玩" :
+                   p && p->server.status == TRAVEL_ACTIVITY_SKIPPED ? "跳过" : "活动";
+            hints[0] = "今天"; hints[1] = "下一"; hints[2] = "玩过";
         } else if (model->page == TRAVEL_FEEDBACK) {
-            text = day->reply;
-            mode = "完成";
+            size_t index = model->reminder < day->activity_count ? model->reminder : 0;
+            int entry = travel_progress_find(progress, day->activities[index].id);
+            const travel_progress_entry_t *p = entry >= 0 ? &progress->entries[entry] : NULL;
+            text = p && p->conflict ? "记录有变化\n问考拉确认" :
+                   progress && progress->writes_paused ? "行程待更新\n稍后再记录" :
+                   p && p->queued ? "已记在这里\n联网后同步" :
+                   p && p->server.status == TRAVEL_ACTIVITY_COMPLETED ? "已经记下啦\n继续去玩吧" :
+                   "暂时没存好\n请再试一次";
+            mode = p && p->queued ? "待传" : p && p->server.status == TRAVEL_ACTIVITY_COMPLETED ? "已玩" : "确认";
             hints[0] = hints[1] = hints[2] = "";
         } else if (model->page == TRAVEL_DAY_TRANSITION) {
             static char transition[40];

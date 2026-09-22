@@ -121,7 +121,7 @@ def parse_flash_args(raw: bytes) -> dict[str, int]:
         offset = int(fields[0], 0)
         name = fields[1]
         safe_relative_name(name)
-        content_pack = name == "cards.klp" and offset == 0x700000
+        content_pack = name == "cards.klp" and offset == 0x600000
         if (not name.endswith(".bin") and not content_pack) or name in images or not 0 <= offset < FLASH_SIZE:
             raise ValueError(f"invalid or duplicate flash_args image: {name}")
         images[name] = offset

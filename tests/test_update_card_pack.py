@@ -20,7 +20,7 @@ def table(entries):
 class ContentUpdateTests(unittest.TestCase):
     def setUp(self):
         self.entries = [(1, 2, 0x9000, 0x6000, 'nvs'), (1, 1, 0xf000, 0x1000, 'phy_init'),
-                        (0, 0, 0x10000, 0x6f0000, 'factory'), (1, 0x40, 0x700000, 0x100000, 'travel_cards')]
+                        (0, 0, 0x10000, 0x5f0000, 'factory'), (1, 0x40, 0x600000, 0x200000, 'travel_cards')]
     def test_accepts_exact_content_partition(self): check_layout(table(self.entries))
     def test_stock_app_cannot_be_overwritten(self):
         with self.assertRaises(ValueError): check_layout(table(self.entries[:-2] + [(0, 0, 0x10000, 0x7f0000, 'factory')]))
@@ -30,8 +30,15 @@ class ContentUpdateTests(unittest.TestCase):
     def test_wrong_offset_and_bad_md5_are_rejected(self):
         entries = list(self.entries); entries[3] = (1, 0x40, 0x600000, 0x100000, 'travel_cards')
         with self.assertRaises(ValueError): check_layout(table(entries))
+        entries = list(self.entries); entries[3] = (1, 0x40, 0x610000, 0x1f0000, 'travel_cards')
+        with self.assertRaises(ValueError): check_layout(table(entries))
         raw = bytearray(table(self.entries)); raw[20] ^= 1
         with self.assertRaises(ValueError): check_layout(bytes(raw))
+    def test_old_one_mib_layout_requires_firmware_migration(self):
+        entries = self.entries[:2] + [(0, 0, 0x10000, 0x6f0000, 'factory'),
+                                     (1, 0x40, 0x700000, 0x100000, 'travel_cards')]
+        with self.assertRaisesRegex(ValueError, 'migrate firmware and partition table'):
+            check_layout(table(entries))
     def test_default_cli_does_not_open_even_an_explicit_port(self):
         result = subprocess.run([sys.executable, str(ROOT / 'tools/update_card_pack.py'),
             str(ROOT / 'assets/packs/western-australia/cards.klp'), '--port', 'NOT_A_PORT'], text=True, capture_output=True)

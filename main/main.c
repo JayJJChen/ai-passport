@@ -15,11 +15,13 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
+#include "esp_random.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -29,6 +31,7 @@ typedef enum {
     APP_EVENT_WIFI,
     APP_EVENT_VOICE_STATUS,
     APP_EVENT_EXTERNAL_MESSAGE,
+    APP_EVENT_PROGRESS,
 } app_event_type_t;
 
 typedef struct {
@@ -37,6 +40,7 @@ typedef struct {
         struct { bsp_btn_t key; bsp_btn_ev_t event; } button;
         voice_wifi_state_t wifi;
         voice_assistant_status_t voice;
+        voice_progress_request_t *progress;
         struct { uint8_t kind; uint8_t payload[15]; } external;
     } data;
 } app_event_t;
@@ -47,12 +51,16 @@ extern const uint8_t default_pack_end[] asm("_binary_koala_default_end");
 static travel_content_t s_content;
 static travel_model_t s_model;
 static travel_saved_state_t s_state;
+static travel_progress_t s_progress, s_progress_backup;
+static SemaphoreHandle_t s_progress_done, s_progress_gate;
+static bool s_progress_stopping;
+static bool s_progress_cache_incompatible;
 static QueueHandle_t s_input;
 static esp_partition_mmap_handle_t s_pack_map;
 static bool s_battery_ready;
 static voice_wifi_state_t s_wifi_state = VOICE_WIFI_OFFLINE;
 static voice_assistant_status_t s_voice_status = VOICE_ASSISTANT_OFFLINE;
-static bool s_ptt_active;
+static bool s_ptt_active, s_ptt_from_home;
 static uint32_t s_ignore_ok_click_until;
 
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
@@ -63,7 +71,11 @@ static void state_load(void) {
     if (nvs_open("passport", NVS_READONLY, &handle) != ESP_OK) return;
     travel_saved_state_t loaded;
     size_t size = sizeof(loaded);
-    esp_err_t result = nvs_get_blob(handle, "wa_state2", &loaded, &size);
+    esp_err_t result = nvs_get_blob(handle, "wa_state3", &loaded, &size);
+    if (result == ESP_ERR_NVS_NOT_FOUND) {
+        size = sizeof(loaded);
+        result = nvs_get_blob(handle, "wa_state2", &loaded, &size);
+    }
     nvs_close(handle);
     if (result == ESP_OK) travel_saved_state_import(&s_state, &loaded, size);
 }
@@ -71,7 +83,7 @@ static void state_load(void) {
 static void state_save(void) {
     nvs_handle_t handle;
     if (nvs_open("passport", NVS_READWRITE, &handle) == ESP_OK) {
-        nvs_set_blob(handle, "wa_state2", &s_state, sizeof(s_state));
+        nvs_set_blob(handle, "wa_state3", &s_state, sizeof(s_state));
         nvs_commit(handle);
         nvs_close(handle);
     }
@@ -94,6 +106,7 @@ static bool apply_automatic_date(time_t now, bool allow_transition) {
     bool changed = s_model.day != day || s_model.date_state != state;
     s_model.day = (uint8_t)day;
     s_model.date_state = state;
+    if (s_model.reminder >= s_content.days[s_model.day].activity_count) s_model.reminder = 0;
     if (allow_transition && state == TRAVEL_DATE_ACTIVE && s_state.last_walk_day != s_model.day) {
         travel_model_start_transition(&s_model, s_model.day, now_ms());
         s_state.last_walk_day = s_model.day;
@@ -103,16 +116,72 @@ static bool apply_automatic_date(time_t now, bool allow_transition) {
     return changed;
 }
 
-static uint8_t preferred_reminder(time_t now) {
+static uint8_t preferred_activity(void) {
     const travel_day_t *day = &s_content.days[s_model.day];
-    int16_t minutes[TRAVEL_MAX_REMINDERS] = {-1, -1, -1, -1};
-    for (size_t i = 0; i < day->reminder_count; ++i) minutes[i] = day->reminders[i].minute_of_day;
-    struct tm local;
-    int minute = 0;
-    bool valid = current_perth_time(now, &local, &minute);
-    return travel_model_next_reminder(minutes, day->reminder_count,
-        s_state.completion.completed[s_model.day], valid,
-        s_model.preview || s_model.date_state != TRAVEL_DATE_ACTIVE, minute);
+    for (size_t i = 0; i < day->activity_count; ++i)
+        if (travel_progress_status(&s_progress, day->activities[i].id) == TRAVEL_ACTIVITY_PENDING) return (uint8_t)i;
+    return 0; /* completed and skipped activities remain browsable */
+}
+static void progress_load(void) {
+    travel_progress_init(&s_progress, esp_random(), esp_random());
+    for (size_t d = 0; d < s_content.day_count; ++d)
+        for (size_t a = 0; a < s_content.days[d].activity_count; ++a)
+            (void)travel_progress_add(&s_progress, s_content.days[d].activities[a].id);
+    nvs_handle_t handle;
+    if (nvs_open("passport", NVS_READONLY, &handle) != ESP_OK) return;
+    size_t size = sizeof(s_progress_backup);
+    esp_err_t result = nvs_get_blob(handle, "wa_progress1", &s_progress_backup, &size);
+    nvs_close(handle);
+    if (result == ESP_OK && !travel_progress_import(&s_progress, &s_progress_backup, size)) {
+        /* Preserve the old blob including its unsent operations until content is reconciled. */
+        s_progress_cache_incompatible = true; s_progress.writes_paused = true;
+        ESP_LOGW(TAG, "Progress cache catalogue differs; saved operations retained, writes paused");
+    } else if (result != ESP_OK && result != ESP_ERR_NVS_NOT_FOUND) {
+        s_progress_cache_incompatible = true; s_progress.writes_paused = true;
+    }
+}
+static bool progress_save(void) {
+    if (s_progress_cache_incompatible) return false;
+    nvs_handle_t handle;
+    if (nvs_open("passport", NVS_READWRITE, &handle) != ESP_OK) return false;
+    esp_err_t result = nvs_set_blob(handle, "wa_progress1", &s_progress, sizeof(s_progress));
+    if (result == ESP_OK) result = nvs_commit(handle);
+    nvs_close(handle); return result == ESP_OK;
+}
+/* The worker waits for the state owner to persist an acknowledgement before sending another operation.
+ * Only one control worker invokes this callback. No network or LVGL calls run in the state owner. */
+static bool on_progress(voice_progress_request_t *request, void *context) {
+    (void)context;
+    if (!s_input || !s_progress_done || !s_progress_gate) return false;
+    app_event_t event = {.type = APP_EVENT_PROGRESS, .data.progress = request};
+    xSemaphoreTake(s_progress_gate, portMAX_DELAY);
+    bool queued = !s_progress_stopping && xQueueSend(s_input, &event, 0) == pdTRUE;
+    xSemaphoreGive(s_progress_gate);
+    if (!queued || xSemaphoreTake(s_progress_done, portMAX_DELAY) != pdTRUE) return false;
+    return request->accepted;
+}
+static void process_progress(voice_progress_request_t *request) {
+    request->accepted = false;
+    if (request->kind == VOICE_PROGRESS_NEXT) {
+        request->has_operation = travel_progress_next(&s_progress, &request->operation);
+        request->accepted = true;
+    } else if (!s_progress_cache_incompatible) {
+        s_progress_backup = s_progress;
+        bool valid = false;
+        if (request->kind == VOICE_PROGRESS_ACK || request->kind == VOICE_PROGRESS_CONFLICT)
+            valid = travel_progress_ack(&s_progress, &request->operation, request->snapshot,
+                                        request->kind == VOICE_PROGRESS_CONFLICT);
+        else if (request->kind == VOICE_PROGRESS_PAUSE) {
+            s_progress.writes_paused = true; valid = true;
+        } else valid = travel_progress_apply(&s_progress, request->snapshot);
+        /* A mismatched snapshot deliberately pauses writes while retaining the queue. */
+        if (valid || s_progress.writes_paused != s_progress_backup.writes_paused) {
+            if (!memcmp(&s_progress, &s_progress_backup, sizeof(s_progress)) || progress_save())
+                request->accepted = valid;
+            else s_progress = s_progress_backup;
+        } else s_progress = s_progress_backup;
+    }
+    xSemaphoreGive(s_progress_done);
 }
 
 static void on_button(bsp_btn_t key, bsp_btn_ev_t event, void *user) {
@@ -136,20 +205,41 @@ static void on_voice_status(voice_assistant_status_t status, void *context) {
 
 static bool content_load(void) {
     const esp_partition_t *partition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 0x40, "travel_cards");
-    const void *data;
-    if (partition && esp_partition_mmap(partition, 0, partition->size, ESP_PARTITION_MMAP_DATA, &data, &s_pack_map) == ESP_OK) {
-        if (travel_content_open(&s_content, data, partition->size)) {
-            ESP_LOGI(TAG, "Loaded replaceable card pack, %u days", (unsigned)s_content.day_count);
-            return true;
-        }
+    const void *preferred = NULL;
+    bool mapped = partition && esp_partition_mmap(partition, 0, partition->size,
+        ESP_PARTITION_MMAP_DATA, &preferred, &s_pack_map) == ESP_OK;
+    bool used_builtin = false;
+    bool opened = travel_content_open_with_fallback(&s_content,
+        mapped ? preferred : NULL, mapped ? partition->size : 0,
+        default_pack_start, (size_t)(default_pack_end - default_pack_start), &used_builtin);
+    if (mapped && (!opened || used_builtin)) {
         esp_partition_munmap(s_pack_map);
-        ESP_LOGW(TAG, "Content partition invalid; using built-in Western Australia pack");
+        s_pack_map = 0;
     }
-    return travel_content_open(&s_content, default_pack_start, (size_t)(default_pack_end - default_pack_start));
+    if (opened) {
+        ESP_LOGI(TAG, "Loaded %s card pack, %u days", used_builtin ? "built-in" : "replaceable",
+                 (unsigned)s_content.day_count);
+        if (mapped && used_builtin) ESP_LOGW(TAG, "Content partition invalid; using built-in Western Australia pack");
+    }
+    return opened;
 }
 
 static void enter_deep_sleep(void) {
     ESP_LOGI(TAG, "Entering deep sleep, wake on GPIO0 button press");
+    /* Cancel queued state handshakes before waiting for the voice worker. The gate prevents
+     * a new stack-backed request being queued after this drain and avoids a shutdown deadlock. */
+    if (s_progress_gate) {
+        xSemaphoreTake(s_progress_gate, portMAX_DELAY);
+        s_progress_stopping = true;
+        app_event_t event;
+        while (xQueueReceive(s_input, &event, 0) == pdTRUE) {
+            if (event.type == APP_EVENT_PROGRESS) {
+                event.data.progress->accepted = false;
+                xSemaphoreGive(s_progress_done);
+            }
+        }
+        xSemaphoreGive(s_progress_gate);
+    }
     voice_assistant_prepare_sleep();
     if (s_battery_ready) bsp_battery_sleep();
     bsp_audio_sleep();
@@ -174,7 +264,7 @@ static void enter_deep_sleep(void) {
 }
 
 static const char *page_name(travel_page_t page) {
-    static const char *names[] = {"home", "schedule", "reminder", "feedback", "day_select", "day_transition"};
+    static const char *names[] = {"home", "schedule", "activities", "feedback", "day_select", "day_transition"};
     return (unsigned)page < sizeof(names) / sizeof(names[0]) ? names[page] : "unknown";
 }
 
@@ -186,19 +276,24 @@ static const char *date_state_name(travel_date_state_t state) {
 static voice_state_snapshot_t voice_snapshot(int battery) {
     voice_state_snapshot_t snapshot = {
         .state_revision = s_state.state_revision,
+        .progress_revision = s_progress.progress_revision,
+        .current_activity_id = s_model.page == TRAVEL_REMINDER || s_model.page == TRAVEL_FEEDBACK ?
+            s_content.days[s_model.day].activities[s_model.reminder].id : NULL,
         .current_day = s_model.day,
         .preview_mode = s_model.preview,
         .date_state = date_state_name(s_model.date_state),
         .page = page_name(s_model.page),
         .current_day_id = s_content.days[s_model.day].id,
-        .next_reminder = preferred_reminder(time(NULL)),
+        .next_reminder = preferred_activity(),
         .battery_percent = battery,
         .device_time = (int64_t)time(NULL),
     };
-    memcpy(snapshot.completion_masks, s_state.completion.completed,
-           sizeof(snapshot.completion_masks));
-    for (size_t day = 0; day < TRAVEL_MAX_DAYS; ++day)
-        snapshot.reminder_counts[day] = (uint8_t)s_content.days[day].reminder_count;
+    for (size_t day = 0; day < TRAVEL_MAX_DAYS; ++day) {
+        snapshot.reminder_counts[day] = (uint8_t)s_content.days[day].activity_count;
+        for (size_t a = 0; a < s_content.days[day].activity_count; ++a)
+            if (travel_progress_status(&s_progress, s_content.days[day].activities[a].id) == TRAVEL_ACTIVITY_COMPLETED)
+                snapshot.completion_masks[day] |= (uint8_t)(1u << a);
+    }
     return snapshot;
 }
 
@@ -239,20 +334,28 @@ static void input_task(void *arg) {
     for (;;) {
         app_event_t event;
         if (xQueueReceive(s_input, &event, pdMS_TO_TICKS(100)) == pdTRUE) {
+            if (event.type == APP_EVENT_PROGRESS) {
+                process_progress(event.data.progress);
+                redraw = true;
+                continue;
+            }
             last_input = now_ms();
             if (backlight != 75) { bsp_display_backlight(75); backlight = 75; }
             if (event.type == APP_EVENT_BUTTON) {
                 bsp_btn_t key = event.data.button.key;
                 bsp_btn_ev_t key_event = event.data.button.event;
                 if (key == BSP_BTN_OK && key_event == BSP_BTN_PRESS && s_model.page == TRAVEL_HOME) {
+                    s_ptt_from_home = true;
                     voice_state_snapshot_t snapshot = voice_snapshot(battery);
                     s_ptt_active = voice_assistant_begin(&snapshot);
                     redraw = true;
                     continue;
                 }
-                if (key == BSP_BTN_OK && key_event == BSP_BTN_RELEASE && s_model.page == TRAVEL_HOME) {
+                if (key == BSP_BTN_OK && key_event == BSP_BTN_RELEASE && s_ptt_from_home) {
+                    /* Navigation may have changed the page while the child held OK. */
                     if (s_ptt_active) voice_assistant_end();
                     s_ptt_active = false;
+                    s_ptt_from_home = false;
                     s_ignore_ok_click_until = now_ms() + 600;
                     redraw = true;
                     continue;
@@ -270,14 +373,18 @@ static void input_task(void *arg) {
                     (key == BSP_BTN_UP ? TRAVEL_UP : key == BSP_BTN_DOWN ? TRAVEL_DOWN : TRAVEL_OK);
                 const travel_day_t *day = &s_content.days[s_model.day];
                 if (input == TRAVEL_DOWN && s_model.page != TRAVEL_REMINDER) {
-                    uint8_t reminder = preferred_reminder(time(NULL));
+                    uint8_t reminder = preferred_activity();
                     s_model.reminder = reminder == TRAVEL_DAY_NONE ? 0 : reminder;
                 }
                 travel_action_t action = travel_model_input(&s_model, input,
-                    TRAVEL_SCHEDULE_CARD_COUNT, day->reminder_count, now_ms());
+                    TRAVEL_SCHEDULE_CARD_COUNT, day->activity_count, now_ms());
                 if (action == TRAVEL_COMPLETE_REMINDER) {
-                    if (travel_model_complete(&s_model, &s_state.completion)) s_state.state_revision++;
-                    state_save();
+                    s_progress_backup = s_progress;
+                    if (travel_progress_mark(&s_progress, day->activities[s_model.reminder].id, TRAVEL_ACTIVITY_COMPLETED)) {
+                        if (!memcmp(&s_progress, &s_progress_backup, sizeof(s_progress)) || progress_save())
+                            voice_assistant_refresh_progress();
+                        else s_progress = s_progress_backup;
+                    }
                 } else if (action == TRAVEL_SAVE_SELECTION || action == TRAVEL_DAY_CHANGED) {
                     s_state.state_revision++;
                     save_selection_and_walk(action == TRAVEL_DAY_CHANGED);
@@ -322,7 +429,7 @@ static void input_task(void *arg) {
             struct tm local;
             int minute = 0;
             bool valid = current_perth_time(current, &local, &minute);
-            travel_ui_refresh(&s_content, &s_model, &s_state.completion, battery, minute, valid);
+            travel_ui_refresh(&s_content, &s_model, &s_progress, battery, minute, valid);
             bsp_lvgl_unlock();
             redraw = false;
         }
@@ -351,6 +458,7 @@ void app_main(void) {
     if (!bsp_lvgl_lock(2000)) { ESP_LOGE(TAG, "Initial UI lock unavailable"); return; }
     if (!content_load()) { bsp_lvgl_unlock(); ESP_LOGE(TAG, "Default card pack could not be loaded"); return; }
 
+    progress_load();
     travel_model_restore(&s_model, &s_state);
     if (s_model.preview) {
         if (s_state.last_walk_day != s_model.day) {
@@ -365,12 +473,14 @@ void app_main(void) {
     struct tm local;
     int minute = 0;
     bool clock_valid = current_perth_time(time(NULL), &local, &minute);
-    travel_ui_refresh(&s_content, &s_model, &s_state.completion, -1, minute, clock_valid);
+    travel_ui_refresh(&s_content, &s_model, &s_progress, -1, minute, clock_valid);
     bsp_lvgl_unlock();
     bsp_display_backlight(75);
 
+    s_progress_done = xSemaphoreCreateBinary();
+    s_progress_gate = xSemaphoreCreateMutex();
     s_input = xQueueCreate(12, sizeof(app_event_t));
-    if (!s_input || xTaskCreate(input_task, "koala_input", 4096, NULL, 5, NULL) != pdPASS) {
+    if (!s_input || !s_progress_done || !s_progress_gate || xTaskCreate(input_task, "koala_input", 4096, NULL, 5, NULL) != pdPASS) {
         ESP_LOGE(TAG, "Input task allocation failed");
         if (s_input) { vQueueDelete(s_input); s_input = NULL; }
         return;
@@ -378,6 +488,7 @@ void app_main(void) {
     if (bsp_button_init(on_button, NULL) != ESP_OK) ESP_LOGE(TAG, "Buttons unavailable; homepage remains visible");
     esp_err_t wifi_result = voice_wifi_init(on_wifi, NULL);
     if (wifi_result != ESP_OK) ESP_LOGE(TAG, "Wi-Fi unavailable: %s", esp_err_to_name(wifi_result));
+    voice_assistant_set_progress_callback(on_progress, NULL);
     esp_err_t voice_result = voice_assistant_init(on_voice_status, NULL);
     if (voice_result != ESP_OK) {
         ESP_LOGE(TAG, "Voice assistant unavailable: %s", esp_err_to_name(voice_result));
@@ -388,5 +499,5 @@ void app_main(void) {
     ESP_LOGI(TAG, "UI ready: free heap=%u, largest block=%u",
         (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
-    ESP_LOGI(TAG, "Ready: UP=schedule, DOWN=reminders, hold OK=talk, hold UP=date, double UP=Wi-Fi, hold DOWN=sleep");
+    ESP_LOGI(TAG, "Ready: UP=schedule, DOWN=activities, hold OK=talk, hold UP=date, double UP=Wi-Fi, hold DOWN=sleep");
 }

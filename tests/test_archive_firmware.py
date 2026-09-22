@@ -402,10 +402,10 @@ class FirmwareArchiveTest(unittest.TestCase):
 
     def test_content_pack_flash_entry_is_limited_to_its_partition(self) -> None:
         original = (self.build / "flash_args").read_bytes()
-        images = ARCHIVE.parse_flash_args(original + b"0x700000 cards.klp\n")
-        self.assertEqual(images["cards.klp"], 0x700000)
-        for entry in (b"0x10000 cards.klp\n", b"0x700000 other.klp\n",
-                      b"0x700000 cards.klp\n0x700000 cards.klp\n"):
+        images = ARCHIVE.parse_flash_args(original + b"0x600000 cards.klp\n")
+        self.assertEqual(images["cards.klp"], 0x600000)
+        for entry in (b"0x10000 cards.klp\n", b"0x600000 other.klp\n", b"0x700000 cards.klp\n",
+                      b"0x600000 cards.klp\n0x600000 cards.klp\n"):
             with self.subTest(entry=entry), self.assertRaises(ValueError):
                 ARCHIVE.parse_flash_args(original + entry)
 

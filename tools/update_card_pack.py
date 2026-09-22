@@ -7,17 +7,17 @@ import sys
 import tempfile
 from pathlib import Path
 sys.dont_write_bytecode = True
-from pack_cards import verify_pack, CAPACITY
+from pack_cards import verify_pack, CAPACITY, CONTENT_OFFSET
 from verify_firmware import parse_partition_table
 
-OFFSET = 0x700000
+OFFSET = CONTENT_OFFSET
 
 def check_layout(table: bytes) -> None:
     partitions, md5 = parse_partition_table(table, 0x9000)
     matching = [p for p in partitions if p.label == 'travel_cards' and p.kind == 1 and p.subtype == 0x40
                 and p.offset == OFFSET and p.size == CAPACITY]
     if not md5 or len(matching) != 1:
-        raise ValueError('device does not have the version-1 Koala content partition; do not write it')
+        raise ValueError('device does not have the 2 MiB Koala content partition at 0x600000; migrate firmware and partition table before a content-only update')
     for p in partitions:
         if p.label != 'travel_cards' and p.offset < OFFSET + CAPACITY and OFFSET < p.end:
             raise ValueError('content overlaps another device partition')

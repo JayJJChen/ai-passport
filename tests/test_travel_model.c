@@ -22,7 +22,7 @@ int main(void) {
     assert(travel_saved_state_import(&loaded, &saved, sizeof(saved)));
     travel_model_restore(&model, &loaded);
     assert(model.preview && model.day == 6 && model.date_state == TRAVEL_DATE_PREVIEW);
-    assert(loaded.completion.completed[2] == 0x05 && loaded.last_walk_day == 5);
+    assert(loaded.completion.completed[2] == 0 && loaded.last_walk_day == 5);
     saved.version++;
     assert(!travel_saved_state_import(&loaded, &saved, sizeof(saved)));
     assert(loaded.version == TRAVEL_SAVED_STATE_VERSION && loaded.last_walk_day == TRAVEL_DAY_NONE);
@@ -37,7 +37,10 @@ int main(void) {
     old.completion.completed[1] = 0x03;
     assert(travel_saved_state_import(&loaded, &old, sizeof(old)));
     assert(loaded.version == TRAVEL_SAVED_STATE_VERSION && loaded.preview_mode == 1 &&
-           loaded.preview_day == 3 && loaded.completion.completed[1] == 0x03 && loaded.state_revision == 0);
+           loaded.preview_day == 3 && loaded.completion.completed[1] == 0 && loaded.state_revision == 0);
+    saved.completion.completed[0] = 3; saved.version = 2;
+    assert(travel_saved_state_import(&loaded, &saved, sizeof(saved)));
+    assert(loaded.completion.completed[0] == 0 && loaded.preview_day == saved.preview_day);
     travel_model_init(&model);
 
     key(&model, TRAVEL_UP, 0); assert(model.page == TRAVEL_SCHEDULE && model.schedule == 0);

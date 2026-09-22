@@ -66,14 +66,20 @@ static void save_frame(const char *directory, const char *name) {
     fclose(fp);
 }
 
+static uint32_t frame_hash(void) {
+    uint32_t hash = 2166136261u;
+    for (unsigned i = 0; i < 240 * 320; ++i) hash = (hash ^ frame[i]) * 16777619u;
+    return hash;
+}
+
 static void advance_animation(uint32_t milliseconds) {
     lv_tick_inc(milliseconds);
     lv_timer_handler();
 }
 
 static void refresh_static(const travel_content_t *content, travel_model_t *model,
-                           const travel_completion_t *completion, int minute, bool clock_valid) {
-    travel_ui_refresh(content, model, completion, 82, minute, clock_valid);
+                           const travel_progress_t *progress, int minute, bool clock_valid) {
+    travel_ui_refresh(content, model, progress, 82, minute, clock_valid);
     travel_ui_play_motion(TRAVEL_MOTION_NONE);
 }
 
@@ -87,38 +93,72 @@ static bool parse_datetime(const char *value, int *year, int *month, int *day, i
 }
 
 static void render_day(const char *output, const travel_content_t *content, travel_model_t *model,
-                       travel_completion_t *completion, int minute, bool clock_valid) {
+                       travel_progress_t *progress, int minute, bool clock_valid) {
     char name[64];
     model->page = TRAVEL_HOME;
-    memset(completion, 0, sizeof(*completion));
-    refresh_static(content, model, completion, minute, clock_valid);
+
+    refresh_static(content, model, progress, minute, clock_valid);
     snprintf(name, sizeof(name), "day%02u-home", (unsigned)(model->day + 1));
     save_frame(output, name);
+    uint32_t home_hash = frame_hash();
 
     for (size_t i = 0; i < TRAVEL_SCHEDULE_CARD_COUNT; ++i) {
         model->page = TRAVEL_SCHEDULE;
         model->schedule = (uint8_t)i;
-        refresh_static(content, model, completion, minute, clock_valid);
+        refresh_static(content, model, progress, minute, clock_valid);
         snprintf(name, sizeof(name), "day%02u-schedule%u", (unsigned)(model->day + 1), (unsigned)(i + 1));
         save_frame(output, name);
     }
     const travel_day_t *day = &content->days[model->day];
-    for (size_t i = 0; i < day->reminder_count; ++i) {
+    for (size_t i = 0; i < day->activity_count; ++i) {
         model->page = TRAVEL_REMINDER;
         model->reminder = (uint8_t)i;
-        refresh_static(content, model, completion, minute, clock_valid);
+        refresh_static(content, model, progress, minute, clock_valid);
         snprintf(name, sizeof(name), "day%02u-reminder%u", (unsigned)(model->day + 1), (unsigned)(i + 1));
         save_frame(output, name);
     }
     model->page = TRAVEL_FEEDBACK;
-    refresh_static(content, model, completion, minute, clock_valid);
-    snprintf(name, sizeof(name), "day%02u-completed", (unsigned)(model->day + 1));
+    refresh_static(content, model, progress, minute, clock_valid);
+    snprintf(name, sizeof(name), "day%02u-save-failed", (unsigned)(model->day + 1));
     save_frame(output, name);
-    completion->completed[model->day] = 0x0f;
+    for (size_t i = 0; i < day->activity_count; ++i) {
+        int entry = travel_progress_find(progress, day->activities[i].id);
+        progress->entries[entry].server.status = TRAVEL_ACTIVITY_COMPLETED;
+    }
     model->page = TRAVEL_HOME;
-    refresh_static(content, model, completion, minute, clock_valid);
+    refresh_static(content, model, progress, minute, clock_valid);
     snprintf(name, sizeof(name), "day%02u-all-done", (unsigned)(model->day + 1));
     save_frame(output, name);
+    assert(frame_hash() == home_hash); /* home stays the day theme, never an all-done score */
+}
+
+/* Exercise the same selection function used by production content_load(), with real validators. */
+static void check_content_fallback(const uint8_t *builtin, size_t size) {
+    uint8_t *broken = malloc(size);
+    assert(broken && size > TRAVEL_PACK_HEADER_SIZE);
+    memcpy(broken, builtin, size);
+    broken[size - 5] ^= 1;
+    travel_content_t content;
+    bool used_builtin = true;
+    assert(travel_content_open_with_fallback(&content, builtin, size, broken, size, &used_builtin));
+    assert(!used_builtin && content.day_count == TRAVEL_MAX_DAYS);
+    travel_content_close(&content);
+    assert(travel_content_open_with_fallback(&content, broken, size, builtin, size, &used_builtin));
+    assert(used_builtin && content.day_count == TRAVEL_MAX_DAYS && content.days[7].compact_companion);
+    size_t activities = 0;
+    for (size_t day = 0; day < content.day_count; ++day) {
+        activities += content.days[day].activity_count;
+        assert((uintptr_t)content.days[day].background.data - (uintptr_t)builtin < size);
+    }
+    assert(activities == 24);
+    travel_content_close(&content);
+    assert(!travel_content_open_with_fallback(&content, broken, size, broken, size, &used_builtin));
+    assert(!used_builtin && !content.json && !content.day_count);
+    assert(travel_content_open_with_fallback(&content, NULL, 0, builtin, size, &used_builtin));
+    assert(used_builtin && content.day_count == TRAVEL_MAX_DAYS);
+    travel_content_close(&content);
+    free(broken);
+    puts("Production card selection: preferred / corrupt fallback / both corrupt / absent partition: PASS");
 }
 
 int main(int argc, char **argv) {
@@ -140,6 +180,7 @@ int main(int argc, char **argv) {
     fclose(fp);
 
     lv_init();
+    check_content_fallback(data, size);
     lv_display_t *display = lv_display_create(240, 320);
     lv_display_set_color_format(display, LV_COLOR_FORMAT_RGB565);
     lv_display_set_buffers(display, buffer, NULL, sizeof(buffer), LV_DISPLAY_RENDER_MODE_FULL);
@@ -152,7 +193,11 @@ int main(int argc, char **argv) {
     assert(!travel_text_check("字字字字字字字", content.body_font, TRAVEL_BODY_MAX_PX, 2));
 
     travel_model_t model;
-    travel_completion_t completion = {0};
+    travel_progress_t progress;
+    travel_progress_init(&progress, 1, 2);
+    for (size_t d = 0; d < content.day_count; ++d)
+        for (size_t a = 0; a < content.days[d].activity_count; ++a)
+            assert(travel_progress_add(&progress, content.days[d].activities[a].id));
     travel_model_init(&model);
     travel_ui_create(&content);
     int minute = 12 * 60;
@@ -160,29 +205,29 @@ int main(int argc, char **argv) {
         int year, month, day;
         if (!parse_datetime(datetime, &year, &month, &day, &minute)) return 2;
         model.day = (uint8_t)travel_model_day_for_date(year, month, day, &model.date_state);
-        render_day(argv[2], &content, &model, &completion, minute, true);
+        render_day(argv[2], &content, &model, &progress, minute, true);
     } else {
         for (size_t day = 0; day < content.day_count; ++day) {
             model.day = (uint8_t)day;
             model.date_state = TRAVEL_DATE_PREVIEW;
             model.preview = true;
-            render_day(argv[2], &content, &model, &completion, minute, false);
+            render_day(argv[2], &content, &model, &progress, minute, false);
         }
     }
 
     model.preview = false;
     model.page = TRAVEL_DAY_SELECT;
     model.selection = 0;
-    refresh_static(&content, &model, &completion, minute, true);
+    refresh_static(&content, &model, &progress, minute, true);
     save_frame(argv[2], "date-selector-auto");
     model.selection = 7;
-    refresh_static(&content, &model, &completion, minute, true);
+    refresh_static(&content, &model, &progress, minute, true);
     save_frame(argv[2], "date-selector-day07");
 
     model.day = 6;
     model.page = TRAVEL_DAY_TRANSITION;
     model.page_since = 0;
-    travel_ui_refresh(&content, &model, &completion, 82, minute, true);
+    travel_ui_refresh(&content, &model, &progress, 82, minute, true);
     save_frame(argv[2], "transition-first");
     advance_animation(800);
     save_frame(argv[2], "transition-middle");
@@ -190,6 +235,42 @@ int main(int argc, char **argv) {
     save_frame(argv[2], "transition-arrived");
     advance_animation(250);
     save_frame(argv[2], "transition-wave");
+
+    model.day = 7;
+    assert(content.days[7].compact_companion);
+    model.page = TRAVEL_DAY_TRANSITION;
+    travel_ui_refresh(&content, &model, &progress, 82, minute, true);
+    save_frame(argv[2], "quokka-transition-first");
+    advance_animation(800); save_frame(argv[2], "quokka-transition-middle");
+    advance_animation(800); save_frame(argv[2], "quokka-transition-arrived");
+    advance_animation(250); save_frame(argv[2], "quokka-transition-wave");
+    model.page = TRAVEL_HOME;
+    for (unsigned status = TRAVEL_VOICE_OFFLINE; status <= TRAVEL_VOICE_ERROR; ++status) {
+        char name[64];
+        travel_ui_set_voice_status((travel_voice_status_t)status);
+        refresh_static(&content, &model, &progress, minute, true);
+        snprintf(name, sizeof(name), "quokka-voice-%u", status); save_frame(argv[2], name);
+    }
+    travel_ui_set_voice_status(TRAVEL_VOICE_READY);
+    model.page = TRAVEL_REMINDER; model.reminder = 0;
+    int entry = travel_progress_find(&progress, content.days[7].activities[0].id);
+    travel_progress_entry_t *p = &progress.entries[entry];
+    p->queued = true; p->desired_status = TRAVEL_ACTIVITY_COMPLETED;
+    refresh_static(&content, &model, &progress, minute, true); save_frame(argv[2], "quokka-pending");
+    p->queued = false; p->server.status = TRAVEL_ACTIVITY_SKIPPED;
+    refresh_static(&content, &model, &progress, minute, true); save_frame(argv[2], "quokka-skipped");
+    p->conflict = true;
+    refresh_static(&content, &model, &progress, minute, true); save_frame(argv[2], "quokka-conflict");
+    model.page = TRAVEL_FEEDBACK;
+    refresh_static(&content, &model, &progress, minute, true); save_frame(argv[2], "quokka-conflict-feedback");
+    p->conflict = false; p->server.status = TRAVEL_ACTIVITY_COMPLETED;
+    refresh_static(&content, &model, &progress, minute, true); save_frame(argv[2], "quokka-completed-feedback");
+    p->server.status = TRAVEL_ACTIVITY_PENDING;
+    refresh_static(&content, &model, &progress, minute, true); save_frame(argv[2], "quokka-save-failed");
+    p->queued = true;
+    refresh_static(&content, &model, &progress, minute, true); save_frame(argv[2], "quokka-pending-feedback");
+    progress.writes_paused = true;
+    refresh_static(&content, &model, &progress, minute, true); save_frame(argv[2], "quokka-version-mismatch");
 
     printf("Western Australia UI rendering: PASS, %u days, body line=%u, title line=%u\n",
         (unsigned)content.day_count, content.body_font->line_height, content.title_font->line_height);

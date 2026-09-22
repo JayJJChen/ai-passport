@@ -8,12 +8,13 @@
 extern "C" {
 #endif
 
-#define VOICE_STATE_SCHEMA_VERSION 1U
+#define VOICE_STATE_SCHEMA_VERSION 2U
 #define VOICE_STATE_DAY_COUNT 11U
 #define VOICE_STATE_NO_REMINDER 0xffU
 
 typedef struct {
-    uint32_t state_revision;
+    uint32_t state_revision, progress_revision;
+    const char *current_activity_id;
     uint8_t current_day;
     bool preview_mode;
     const char *date_state;

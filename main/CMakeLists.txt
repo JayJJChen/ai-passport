@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "main.c" "travel_model.c" "travel_animation.c" "travel_pack.c" "travel_content.c"
+    SRCS "main.c" "travel_model.c" "travel_progress.c" "travel_animation.c" "travel_pack.c" "travel_content.c"
          "travel_ui.c" "voice_state_payload.c" "voice_wifi.cpp" "voice_assistant.cpp"
          "../assets/fonts/travel_ui_font_24.c" "../assets/fonts/travel_ui_font_36.c"
     INCLUDE_DIRS "."

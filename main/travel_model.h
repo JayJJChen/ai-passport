@@ -31,12 +31,13 @@ typedef enum {
 } travel_action_t;
 
 #define TRAVEL_MAX_DAYS 11
-#define TRAVEL_MAX_REMINDERS 4
+#define TRAVEL_MAX_REMINDERS 4 /* legacy cache layout only */
+#define TRAVEL_MAX_ACTIVITIES 3
 #define TRAVEL_SCHEDULE_CARD_COUNT 3
 #define TRAVEL_FEEDBACK_MS 3000U
 #define TRAVEL_TRANSITION_MS 3350U
 #define TRAVEL_DAY_NONE 0xffU
-#define TRAVEL_SAVED_STATE_VERSION 2U
+#define TRAVEL_SAVED_STATE_VERSION 3U
 
 typedef struct {
     uint8_t completed[TRAVEL_MAX_DAYS];

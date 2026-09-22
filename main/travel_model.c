@@ -40,7 +40,7 @@ bool travel_saved_state_import(travel_saved_state_t *state, const void *data, si
             (old.last_walk_day >= TRAVEL_MAX_DAYS && old.last_walk_day != TRAVEL_DAY_NONE)) return false;
         for (size_t day = 0; day < TRAVEL_MAX_DAYS; ++day)
             if (old.completion.completed[day] & ~((1u << TRAVEL_MAX_REMINDERS) - 1u)) return false;
-        state->completion = old.completion;
+        /* Legacy habit bits are deliberately not activity progress. */
         state->preview_mode = old.preview_mode;
         state->preview_day = old.preview_day;
         state->last_walk_day = old.last_walk_day;
@@ -49,11 +49,13 @@ bool travel_saved_state_import(travel_saved_state_t *state, const void *data, si
     if (size != sizeof(*state)) return false;
     travel_saved_state_t loaded;
     memcpy(&loaded, data, sizeof(loaded));
-    if (loaded.version != TRAVEL_SAVED_STATE_VERSION || loaded.preview_mode > 1 ||
+    if ((loaded.version != TRAVEL_SAVED_STATE_VERSION && loaded.version != 2U) || loaded.preview_mode > 1 ||
         loaded.preview_day >= TRAVEL_MAX_DAYS ||
         (loaded.last_walk_day >= TRAVEL_MAX_DAYS && loaded.last_walk_day != TRAVEL_DAY_NONE)) return false;
     for (size_t day = 0; day < TRAVEL_MAX_DAYS; ++day)
         if (loaded.completion.completed[day] & ~((1u << TRAVEL_MAX_REMINDERS) - 1u)) return false;
+    memset(&loaded.completion, 0, sizeof(loaded.completion));
+    loaded.version = TRAVEL_SAVED_STATE_VERSION;
     *state = loaded;
     return true;
 }

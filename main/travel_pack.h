@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define TRAVEL_PACK_CAPACITY 0x100000u
+#define TRAVEL_PACK_CAPACITY 0x200000u
 #define TRAVEL_PACK_HEADER_SIZE 32u
 #define TRAVEL_PACK_ENTRY_SIZE 40u
 #define TRAVEL_PACK_MAX_FILES 12u

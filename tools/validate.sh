@@ -36,6 +36,9 @@ run_static_checks() {
         tests/test_travel_model.c main/travel_model.c -o "${test_dir}/test_travel_model"
     "${test_dir}/test_travel_model"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_travel_progress.c main/travel_progress.c -o "${test_dir}/test_travel_progress"
+    "${test_dir}/test_travel_progress"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_voice_state_payload.c main/voice_state_payload.c \
         -o "${test_dir}/test_voice_state_payload"
     "${test_dir}/test_voice_state_payload"

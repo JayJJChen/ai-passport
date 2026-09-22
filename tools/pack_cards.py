@@ -11,15 +11,18 @@ import subprocess
 import zlib
 from pathlib import Path
 
-CAPACITY = 0x100000
+CAPACITY = 0x200000
+CONTENT_OFFSET = 0x600000
+TRIP_ID = 'western-australia-2026'
+CONTENT_VERSION = 'wa-child-v1'
 HEADER = struct.Struct('<8s6I')
 ENTRY = struct.Struct('<24s4I')
 ROOT = Path(__file__).resolve().parents[1]
 MAX_DAYS = 11
-MAX_REMINDERS = 4
+MAX_ACTIVITIES = 3
 BODY_MAX_PX = 168
 TITLE_MAX_PX = 108
-SYSTEM_BODY_TEXT = '今天提醒完成住宿活动自动预览出发啦旅程完成下一件事事项都完成啦收到已经完成第天选择日期自动模式月日返回上一下一确定路线按显示0123456789:/'
+SYSTEM_BODY_TEXT = '今天完成住宿活动自动预览出发啦旅程完成下一件事都玩过啦收到已经完成第天选择日期自动模式月日返回上一下一确定路线按显示玩过已玩待传跳过确认待更新未保存已记在这里联网后同步已经记下啦继续去玩吧记录有变化问考拉确认暂时没存好请再试一次0123456789:/'
 
 @functools.lru_cache(maxsize=4)
 def _ttf_metrics(font_path: str):
@@ -73,9 +76,14 @@ def _fits(text: str, font_path: Path, size: int, max_pixels: int, max_lines: int
 
 def validate_manifest(manifest: dict, font_path: Path | None = None) -> tuple[str, str]:
     font_path = font_path or ROOT / 'assets/fonts/NotoSansSC-SemiBold.ttf'
-    if not isinstance(manifest, dict) or manifest.get('version') != 2 or not isinstance(manifest.get('days'), list) or len(manifest['days']) != MAX_DAYS:
-        raise ValueError('version must be 2; provide exactly 11 days')
-    bodies, titles, ids = [], [], set()
+    if not isinstance(manifest, dict) or manifest.get('version') != 3 or not isinstance(manifest.get('days'), list) or len(manifest['days']) != MAX_DAYS:
+        raise ValueError('version must be 3; provide exactly 11 days')
+    for field in ('trip_id', 'content_version'):
+        if not isinstance(manifest.get(field), str) or not re.fullmatch(r'[a-z0-9_-]{1,31}', manifest[field]):
+            raise ValueError(f'{field} must be lowercase ASCII, at most 31 characters')
+    if manifest['trip_id'] != TRIP_ID or manifest['content_version'] != CONTENT_VERSION:
+        raise ValueError('trip_id/content_version does not match the current firmware catalogue')
+    bodies, titles, ids, activity_ids = [], [], set(), set()
     expected_dates = [f'2026-10-{day:02d}' for day in range(2, 13)]
     for index, day in enumerate(manifest['days']):
         if not isinstance(day, dict): raise ValueError('each day must be an object')
@@ -92,15 +100,23 @@ def validate_manifest(manifest: dict, font_path: Path | None = None) -> tuple[st
         schedule = day.get('schedule')
         if not isinstance(schedule, list) or len(schedule) != 3: raise ValueError('schedule must contain route, activity, and lodging')
         text.extend(schedule)
-        reminders = day.get('reminders')
-        if not isinstance(reminders, list) or not 1 <= len(reminders) <= MAX_REMINDERS:
-            raise ValueError('reminders must contain 1..4 items')
-        for reminder in reminders:
-            if not isinstance(reminder, dict) or not isinstance(reminder.get('text'), str): raise ValueError('each reminder needs text')
-            at = reminder.get('at')
-            if at is not None and (not isinstance(at, str) or not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d', at)):
-                raise ValueError('reminder time must be HH:MM')
-            text.append(reminder['text'])
+        if 'reminders' in day:
+            raise ValueError('version 3 uses activities, not reminders')
+        if day.get('companion_layout') not in ('standard', 'compact'):
+            raise ValueError('companion_layout must be standard or compact')
+        activities = day.get('activities')
+        if not isinstance(activities, list) or not 1 <= len(activities) <= MAX_ACTIVITIES:
+            raise ValueError('activities must contain 1..3 items')
+        for activity in activities:
+            if not isinstance(activity, dict) or set(activity) != {'id', 'text', 'optional'}:
+                raise ValueError('each activity requires only id, text, and optional')
+            activity_id = activity['id']
+            if not isinstance(activity_id, str) or not re.fullmatch(r'[a-z0-9_-]{1,48}', activity_id) or activity_id in activity_ids:
+                raise ValueError('activity ids must be unique lowercase ASCII, at most 48 characters')
+            activity_ids.add(activity_id)
+            if not isinstance(activity['optional'], bool):
+                raise ValueError('activity optional must be a boolean')
+            text.append(activity['text'])
         for value in text:
             if not isinstance(value, str) or not value:
                 raise ValueError('card text must be a nonempty string')
@@ -124,7 +140,7 @@ def make_archive(files: dict[str, bytes]) -> bytes:
         payload.extend(data)
     body = b''.join(entries) + payload
     length = HEADER.size + len(body)
-    if length > CAPACITY: raise ValueError('card pack exceeds the 1 MiB content partition')
+    if length > CAPACITY: raise ValueError('card pack exceeds the 2 MiB content partition')
     return HEADER.pack(b'KTRVPK01', 1, length, zlib.crc32(body), len(files), ENTRY.size, 0) + body
 
 def read_archive(data: bytes) -> dict[str, bytes]:
@@ -202,11 +218,24 @@ def build(manifest_path: Path, output: Path, font: Path) -> None:
     verify_pack(archive)
     output.write_bytes(archive)
     identity = {'format': 1, 'size': len(archive), 'sha256': hashlib.sha256(archive).hexdigest(),
-                'content_offset': '0x700000', 'font_storage': 'firmware compile-time subsets',
+                'content_offset': hex(CONTENT_OFFSET), 'font_storage': 'firmware compile-time subsets',
+                'trip_id': source['trip_id'], 'content_version': source['content_version'],
                 'source_font_sha256': hashlib.sha256(font.read_bytes()).hexdigest(),
                 'body_glyphs': sorted(set(body)), 'title_glyphs': sorted(set(title))}
     output.with_name(output.name + '.manifest.json').write_text(json.dumps(identity, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     print(f'Card pack: {output} ({len(archive)} bytes), SHA256 {identity["sha256"]}')
+
+def export_catalogue(manifest_path: Path, output: Path) -> None:
+    """Export the same stable activity identifiers used by the firmware to the server."""
+    if output.resolve() == manifest_path.resolve():
+        raise ValueError('catalogue output must not replace the authoring manifest')
+    source = json.loads(manifest_path.read_text(encoding='utf-8'))
+    validate_manifest(source)
+    catalogue = {'schema_version': 1, 'trip_id': source['trip_id'], 'content_version': source['content_version'],
+                 'days': [{key: day[key] for key in ('id', 'date', 'title', 'activities')} for day in source['days']]}
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(catalogue, ensure_ascii=False, indent=2) + '\n', encoding='utf-8', newline='\n')
+    print(f'Activity catalogue: {output}, {sum(len(day["activities"]) for day in catalogue["days"])} activities')
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -214,8 +243,10 @@ def main() -> None:
     create = sub.add_parser('build'); create.add_argument('manifest', type=Path); create.add_argument('output', type=Path)
     create.add_argument('--font', type=Path, default=ROOT / 'assets/fonts/NotoSansSC-SemiBold.ttf')
     verify = sub.add_parser('verify'); verify.add_argument('pack', type=Path)
+    catalogue = sub.add_parser('export-catalogue'); catalogue.add_argument('manifest', type=Path); catalogue.add_argument('output', type=Path)
     args = parser.parse_args()
     if args.command == 'build': build(args.manifest.resolve(), args.output.resolve(), args.font.resolve())
+    elif args.command == 'export-catalogue': export_catalogue(args.manifest.resolve(), args.output.resolve())
     else:
         data = args.pack.read_bytes(); files = verify_pack(data)
         print(f'Card pack verification: PASS, {len(files)} files, SHA256 {hashlib.sha256(data).hexdigest()}')

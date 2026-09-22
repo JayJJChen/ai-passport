@@ -7,6 +7,8 @@
 int main(void) {
     voice_state_snapshot_t state = {
         .state_revision = 42,
+        .progress_revision = 8,
+        .current_activity_id = "d08_quokka",
         .current_day = 6,
         .preview_mode = true,
         .date_state = "preview",
@@ -23,8 +25,11 @@ int main(void) {
     char payload[768];
     size_t length = voice_state_payload_build(&state, payload, sizeof(payload));
     assert(length == strlen(payload));
-    assert(strstr(payload, "\"schema_version\":1"));
+    assert(strstr(payload, "\"schema_version\":2"));
     assert(strstr(payload, "\"state_revision\":42"));
+    assert(strstr(payload, "\"content_version\":\"wa-child-v1\""));
+    assert(strstr(payload, "\"progress_revision\":8"));
+    assert(strstr(payload, "\"current_activity_id\":\"d08_quokka\""));
     assert(strstr(payload, "\"current_day_id\":\"day07_fremantle\""));
     assert(strstr(payload, "\"completion_masks\":[7,0,0,0,0,0,3,0,0,0,0]"));
     assert(strstr(payload, "\"reminder_counts\":[3,3,3,3,3,3,4,3,3,3,3]"));

@@ -20,6 +20,7 @@ cc -std=c11 -g -O0 -Wall -Wextra -Werror \
     -I"${lvgl}" -I"${repo}/main" -I"${repo}/components/bsp/src" \
     -I"${IDF_PATH}/components/json/cJSON" \
     "${repo}/tools/render_travel.c" "${repo}/main/travel_model.c" "${repo}/main/travel_animation.c" \
+    "${repo}/main/travel_progress.c" \
     "${repo}/main/travel_pack.c" "${repo}/main/travel_content.c" "${repo}/main/travel_ui.c" \
     "${repo}/assets/fonts/travel_ui_font_24.c" "${repo}/assets/fonts/travel_ui_font_36.c" \
     "${repo}/components/bsp/src/bsp_display_rounding.c" "${output}/koala_frames.o" \
