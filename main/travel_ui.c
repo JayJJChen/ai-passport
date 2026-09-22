@@ -8,7 +8,7 @@ extern const uint8_t koala_frames_end[] __asm__("_binary_koala_frames_end");
 
 static lv_obj_t *s_screen, *s_background, *s_koala, *s_title, *s_time, *s_date, *s_mode;
 static lv_obj_t *s_dialog, *s_dialog_text, *s_selector, *s_selector_text, *s_hints[3];
-static lv_obj_t *s_battery, *s_battery_fill;
+static lv_obj_t *s_battery, *s_battery_fill, *s_mode_panel;
 static lv_image_dsc_t s_koala_frames[TRAVEL_KOALA_FRAME_COUNT];
 static travel_animation_t s_animation;
 static travel_motion_tracker_t s_motion_tracker;
@@ -109,6 +109,12 @@ void travel_ui_create(const travel_content_t *content) {
     lv_obj_set_pos(s_koala, 20, 84);
     s_animation_timer = lv_timer_create(animation_timer_cb, 50, NULL);
     lv_timer_pause(s_animation_timer);
+
+    /* Opaque cream surfaces keep the fixed ink labels readable over every daily scene.
+     * They sit behind the existing text positions; the compact companion and key hints do not move. */
+    (void)panel(s_screen, 72, 2, 156, 22, 10);   /* time, date and battery, inside the rounded top edge */
+    (void)panel(s_screen, 8, 25, 116, 36, 10);   /* title, including the date selector's body font */
+    s_mode_panel = panel(s_screen, 125, 33, 61, 37, 10);
 
     s_title = label(s_screen, content->title_font, 108);
     lv_obj_set_pos(s_title, 16, 28);
@@ -262,6 +268,7 @@ void travel_ui_refresh(const travel_content_t *content, const travel_model_t *mo
     }
 
     lv_label_set_text(s_mode, mode);
+    visible(s_mode_panel, mode[0] != 0);
     for (unsigned i = 0; i < 3; ++i) {
         lv_label_set_text(s_hints[i], hints[i]);
         lv_obj_center(s_hints[i]);
