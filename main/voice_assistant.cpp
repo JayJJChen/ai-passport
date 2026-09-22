@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <atomic>
+#include <sys/time.h>
 #include "cJSON.h"
 #include "bsp_audio.h"
 #include "esp_audio_enc.h"
@@ -23,6 +24,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
+#include "travel_model.h"
 #include "voice_wifi.h"
 
 namespace {
@@ -346,17 +348,38 @@ bool deliver_progress(cJSON *root, voice_progress_request_kind_t kind,
     }
     std::free(snapshot); return result;
 }
-bool progress_url(char *url, size_t capacity) {
+bool state_endpoint_url(const char *endpoint, char *url, size_t capacity) {
     const char *base = CONFIG_KOALA_STATE_SYNC_URL;
     const char *tail = std::strrchr(base, '/');
     if (!tail || std::strcmp(tail, "/device-state")) return false;
-    int count = snprintf(url, capacity, "%.*s/activity-progress", (int)(tail - base), base);
+    int count = snprintf(url, capacity, "%.*s/%s", (int)(tail - base), base, endpoint);
     return count > 0 && (size_t)count < capacity;
+}
+bool synchronize_time() {
+    if (!(xEventGroupGetBits(s_events) & kNetworkOnline)) return false;
+    char url[384];
+    if (!state_endpoint_url("time", url, sizeof(url))) return false;
+    int status = 0; cJSON *response = nullptr;
+    esp_err_t result = http_request(url, HTTP_METHOD_GET, nullptr, 0, &status, &response);
+    cJSON *value = response ? cJSON_GetObjectItemCaseSensitive(response, "server_time") : nullptr;
+    double seconds = cJSON_IsNumber(value) ? cJSON_GetNumberValue(value) : 0;
+    bool valid = result == ESP_OK && status == 200 && std::isfinite(seconds) &&
+                 std::floor(seconds) == seconds && seconds >= 1735689600.0 && seconds < 4102444800.0 &&
+                 travel_model_server_time_valid((int64_t)seconds);
+    if (valid) {
+        struct timeval clock = {};
+        clock.tv_sec = (time_t)seconds;
+        valid = settimeofday(&clock, nullptr) == 0;
+    }
+    cJSON_Delete(response);
+    if (valid) ESP_LOGI(TAG, "Clock synchronized from trip service");
+    else ESP_LOGW(TAG, "Trip service clock unavailable; date remains unverified");
+    return valid;
 }
 void synchronize_progress() {
     if (!s_progress_callback || !(xEventGroupGetBits(s_events) & kNetworkOnline)) return;
     char url[384];
-    if (!progress_url(url, sizeof(url))) return;
+    if (!state_endpoint_url("activity-progress", url, sizeof(url))) return;
     /* Bound one flush to the catalogue size. A failed request remains persisted for reconnect. */
     for (unsigned i = 0; i < TRAVEL_ACTIVITY_MAX; ++i) {
         voice_progress_request_t request = {}; request.kind = VOICE_PROGRESS_NEXT;
@@ -468,9 +491,18 @@ void complete_pending_stop() {
 }
 void control_task(void *) {
     Command command;
+    TickType_t last_clock_attempt = 0;
+    bool clock_attempted = false;
     for (;;) {
         complete_pending_stop();
         if (xQueueReceive(s_commands, &command, pdMS_TO_TICKS(100)) != pdTRUE) {
+            TickType_t now = xTaskGetTickCount();
+            if ((xEventGroupGetBits(s_events) & kNetworkOnline) &&
+                !travel_model_clock_valid(time(nullptr)) &&
+                (!clock_attempted || now - last_clock_attempt >= pdMS_TO_TICKS(60000))) {
+                last_clock_attempt = now; clock_attempted = true;
+                (void)synchronize_time();
+            }
             if (xEventGroupGetBits(s_events) & kProgressRefresh) {
                 xEventGroupClearBits(s_events, kProgressRefresh);
                 synchronize_progress();
@@ -479,6 +511,8 @@ void control_task(void *) {
         }
         switch (command.type) {
         case CommandType::NetworkUp:
+            last_clock_attempt = xTaskGetTickCount(); clock_attempted = true;
+            (void)synchronize_time();
             synchronize_progress();
             if (!s_chat) {
                 esp_err_t result = initialize_chat();

@@ -126,5 +126,10 @@ int main(void) {
     assert(strcmp(time_text, "--:--") == 0);
     assert(!travel_model_clock_valid(0));
     assert(travel_model_clock_valid(1789812000));
+    assert(!travel_model_server_time_valid(0));
+    assert(!travel_model_server_time_valid(1735689599));
+    assert(travel_model_server_time_valid(1735689600));
+    assert(travel_model_server_time_valid(1791459000));
+    assert(!travel_model_server_time_valid(4102444800LL));
     puts("Western Australia date, reminder, persistence-state and interaction tests: PASS");
 }

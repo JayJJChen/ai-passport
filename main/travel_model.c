@@ -241,3 +241,7 @@ bool travel_model_clock_valid(time_t t) {
     if (t <= 0 || !localtime_r(&t, &tm)) return false;
     return tm.tm_year + 1900 >= 2025;
 }
+
+bool travel_model_server_time_valid(int64_t seconds) {
+    return seconds >= 1735689600LL && seconds < 4102444800LL;
+}

@@ -89,6 +89,8 @@ int travel_model_day_for_date(int year, int month, int day, travel_date_state_t 
 int travel_model_date_key_for_day(size_t day);
 void travel_model_format_day(size_t day, char *buf, size_t len);
 bool travel_model_clock_valid(time_t t);
+/* Only accept plausible Unix seconds from the authenticated trip service. */
+bool travel_model_server_time_valid(int64_t seconds);
 /* Hardware keys divide the full display height into three equal bands. */
 int travel_key_center(unsigned key, int height);
 /* Backlight only; the button service remains awake. Pairing is bounded separately. */
