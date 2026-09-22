@@ -4,6 +4,10 @@
 #include <stdint.h>
 #include <time.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef enum {
     TRAVEL_HOME,
     TRAVEL_SCHEDULE,
@@ -110,3 +114,7 @@ void travel_model_format_time(int minute_of_day, bool clock_valid, char *buf, si
 
 /* Battery gauge inner fill width in pixels, scaled to 0..TRAVEL_BATTERY_FILL_MAX_W px. */
 int travel_battery_fill_width(int soc);
+
+#ifdef __cplusplus
+}
+#endif
