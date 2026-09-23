@@ -23,6 +23,7 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include <stdlib.h>
+#include <stdatomic.h>
 #include <string.h>
 #include <time.h>
 
@@ -36,6 +37,7 @@ typedef enum {
 
 typedef struct {
     app_event_type_t type;
+    uint32_t sequence; /* physical button order; zero for non-button events */
     union {
         struct { bsp_btn_t key; bsp_btn_ev_t event; } button;
         voice_wifi_state_t wifi;
@@ -56,12 +58,15 @@ static SemaphoreHandle_t s_progress_done, s_progress_gate;
 static bool s_progress_stopping;
 static bool s_progress_cache_incompatible;
 static QueueHandle_t s_input;
+static QueueHandle_t s_buttons;
+static QueueHandle_t s_fallback_clicks;
+static uint32_t s_button_sequence; /* button callbacks run on one esp_timer task */
+static atomic_uint s_last_physical_input_ms;
+static TaskHandle_t s_input_task;
 static esp_partition_mmap_handle_t s_pack_map;
 static bool s_battery_ready;
 static voice_wifi_state_t s_wifi_state = VOICE_WIFI_OFFLINE;
 static voice_assistant_status_t s_voice_status = VOICE_ASSISTANT_OFFLINE;
-static bool s_ptt_active, s_ptt_from_home;
-static uint32_t s_ignore_ok_click_until;
 
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
@@ -186,8 +191,19 @@ static void process_progress(voice_progress_request_t *request) {
 
 static void on_button(bsp_btn_t key, bsp_btn_ev_t event, void *user) {
     (void)user;
-    app_event_t input = {.type = APP_EVENT_BUTTON, .data.button = {key, event}};
-    (void)xQueueSend(s_input, &input, 0);
+    /* The stop click bypasses the queues, but it must still reset idle time. */
+    atomic_store(&s_last_physical_input_ms, now_ms());
+    /* A second OK click stops the microphone even if either queue is full. */
+    if (key == BSP_BTN_OK && event == BSP_BTN_CLICK && voice_assistant_end_if_active())
+        return;
+    app_event_t input = {.type = APP_EVENT_BUTTON, .sequence = ++s_button_sequence,
+                         .data.button = {key, event}};
+    if (s_buttons && xQueueSend(s_buttons, &input, 0) == pdTRUE) return;
+    /* Preserve a first click if a burst of other button events filled its queue. */
+    if (key == BSP_BTN_OK && event == BSP_BTN_CLICK) {
+        if (s_fallback_clicks && xQueueSend(s_fallback_clicks, &input.sequence, 0) == pdTRUE) return;
+        if (s_input_task) xTaskNotifyGive(s_input_task);
+    }
 }
 
 static void on_wifi(voice_wifi_state_t state, void *context) {
@@ -240,7 +256,18 @@ static void enter_deep_sleep(void) {
         }
         xSemaphoreGive(s_progress_gate);
     }
-    voice_assistant_prepare_sleep();
+    if (!voice_assistant_prepare_sleep()) {
+        if (s_progress_gate) {
+            xSemaphoreTake(s_progress_gate, portMAX_DELAY);
+            s_progress_stopping = false;
+            xSemaphoreGive(s_progress_gate);
+        }
+        ESP_LOGW(TAG, "Voice worker did not stop; deep sleep canceled");
+        return;
+    }
+    if (s_input_task) (void)ulTaskNotifyTake(pdTRUE, 0);
+    if (s_buttons) xQueueReset(s_buttons);
+    if (s_fallback_clicks) xQueueReset(s_fallback_clicks);
     if (s_battery_ready) bsp_battery_sleep();
     bsp_audio_sleep();
     bsp_audio_prepare_deep_sleep();
@@ -312,8 +339,7 @@ static travel_voice_status_t ui_voice_status(void) {
 
 static bool voice_busy(void) {
     return s_voice_status == VOICE_ASSISTANT_SYNCING || s_voice_status == VOICE_ASSISTANT_LISTENING ||
-           s_voice_status == VOICE_ASSISTANT_THINKING || s_voice_status == VOICE_ASSISTANT_SPEAKING ||
-           s_wifi_state == VOICE_WIFI_CONFIGURING;
+           s_voice_status == VOICE_ASSISTANT_THINKING || s_voice_status == VOICE_ASSISTANT_SPEAKING;
 }
 
 static void save_selection_and_walk(bool day_changed) {
@@ -328,37 +354,51 @@ static void input_task(void *arg) {
     int battery = s_battery_ready ? bsp_battery_soc() : -1;
     uint32_t battery_time = now_ms();
     uint32_t last_input = battery_time;
+    uint32_t config_started_ms = 0;
     unsigned backlight = 75;
     bool redraw = true;
     time_t last_minute = 0;
     for (;;) {
         app_event_t event;
-        if (xQueueReceive(s_input, &event, pdMS_TO_TICKS(100)) == pdTRUE) {
+        app_event_t next_button;
+        uint32_t next_fallback;
+        bool queued_button = s_buttons && xQueuePeek(s_buttons, &next_button, 0) == pdTRUE;
+        bool queued_fallback = s_fallback_clicks &&
+                               xQueuePeek(s_fallback_clicks, &next_fallback, 0) == pdTRUE;
+        bool has_event = false;
+        if (queued_button && (!queued_fallback ||
+            (int32_t)(next_button.sequence - next_fallback) < 0)) {
+            has_event = xQueueReceive(s_buttons, &event, 0) == pdTRUE;
+        } else if (queued_fallback && xQueueReceive(s_fallback_clicks, &next_fallback, 0) == pdTRUE) {
+            event = (app_event_t){.type = APP_EVENT_BUTTON, .sequence = next_fallback,
+                .data.button = {BSP_BTN_OK, BSP_BTN_CLICK}};
+            has_event = true;
+        }
+        if (!has_event && ulTaskNotifyTake(pdFALSE, 0) != 0) {
+            event = (app_event_t){.type = APP_EVENT_BUTTON,
+                .data.button = {BSP_BTN_OK, BSP_BTN_CLICK}};
+            has_event = true;
+        }
+        if (!has_event) has_event = xQueueReceive(s_input, &event, pdMS_TO_TICKS(100)) == pdTRUE;
+        if (has_event) {
             if (event.type == APP_EVENT_PROGRESS) {
                 process_progress(event.data.progress);
                 redraw = true;
                 continue;
             }
-            last_input = now_ms();
-            if (backlight != 75) { bsp_display_backlight(75); backlight = 75; }
             if (event.type == APP_EVENT_BUTTON) {
                 bsp_btn_t key = event.data.button.key;
                 bsp_btn_ev_t key_event = event.data.button.event;
-                if (key == BSP_BTN_OK && key_event == BSP_BTN_PRESS && s_model.page == TRAVEL_HOME) {
-                    s_ptt_from_home = true;
-                    voice_state_snapshot_t snapshot = voice_snapshot(battery);
-                    s_ptt_active = voice_assistant_begin(&snapshot);
-                    redraw = true;
-                    continue;
-                }
-                if (key == BSP_BTN_OK && key_event == BSP_BTN_RELEASE && s_ptt_from_home) {
-                    /* Navigation may have changed the page while the child held OK. */
-                    if (s_ptt_active) voice_assistant_end();
-                    s_ptt_active = false;
-                    s_ptt_from_home = false;
-                    s_ignore_ok_click_until = now_ms() + 600;
-                    redraw = true;
-                    continue;
+                last_input = now_ms();
+                if (backlight != 75) { bsp_display_backlight(75); backlight = 75; }
+                if (key == BSP_BTN_OK && key_event == BSP_BTN_CLICK) {
+                    if (voice_assistant_end_if_active()) { redraw = true; continue; }
+                    if (s_model.page == TRAVEL_HOME) {
+                        voice_state_snapshot_t snapshot = voice_snapshot(battery);
+                        (void)voice_assistant_begin(&snapshot);
+                        redraw = true;
+                        continue;
+                    }
                 }
                 if (key == BSP_BTN_UP && key_event == BSP_BTN_DOUBLE && s_model.page == TRAVEL_HOME) {
                     voice_wifi_start_configuration();
@@ -366,8 +406,6 @@ static void input_task(void *arg) {
                     continue;
                 }
                 if (key_event != BSP_BTN_CLICK && key_event != BSP_BTN_LONG) continue;
-                if (key == BSP_BTN_OK && key_event == BSP_BTN_CLICK &&
-                    (int32_t)(s_ignore_ok_click_until - now_ms()) >= 0) continue;
                 travel_input_t input = key_event == BSP_BTN_LONG ?
                     (key == BSP_BTN_UP ? TRAVEL_UP_LONG : key == BSP_BTN_DOWN ? TRAVEL_DOWN_LONG : TRAVEL_OK_LONG) :
                     (key == BSP_BTN_UP ? TRAVEL_UP : key == BSP_BTN_DOWN ? TRAVEL_DOWN : TRAVEL_OK);
@@ -394,10 +432,8 @@ static void input_task(void *arg) {
                 }
                 redraw = true;
             } else if (event.type == APP_EVENT_WIFI) {
-                s_wifi_state = event.data.wifi;
                 redraw = true;
             } else if (event.type == APP_EVENT_VOICE_STATUS) {
-                s_voice_status = event.data.voice;
                 redraw = true;
             } else {
                 /* Reserved for a future ESP-NOW message source. */
@@ -405,12 +441,34 @@ static void input_task(void *arg) {
             }
         }
 
+        /* Status notifications may be dropped when the shared queue is full. */
+        voice_assistant_status_t voice_status = voice_assistant_get_status();
+        if (voice_status != s_voice_status) { s_voice_status = voice_status; redraw = true; }
+        voice_wifi_state_t wifi_state = voice_wifi_get_state();
+        if (wifi_state != s_wifi_state) {
+            s_wifi_state = wifi_state;
+            config_started_ms = wifi_state == VOICE_WIFI_CONFIGURING ? now_ms() : 0;
+            redraw = true;
+        }
+
+        uint32_t physical_input_ms = atomic_load(&s_last_physical_input_ms);
+        if (physical_input_ms && (int32_t)(physical_input_ms - last_input) > 0) {
+            last_input = physical_input_ms;
+            if (backlight != 75) { bsp_display_backlight(75); backlight = 75; }
+        }
         uint32_t now = now_ms();
         redraw |= travel_model_tick(&s_model, now);
-        bool busy = voice_busy();
+        /* First-boot captive AP is useful for setup, but an unattended device
+         * must be allowed to sleep. A button wakes it and restarts setup. */
+        bool configuring = s_wifi_state == VOICE_WIFI_CONFIGURING && config_started_ms &&
+                           (uint32_t)(now - config_started_ms) < 300000;
+        bool busy = voice_busy() || configuring;
         unsigned next_backlight = travel_backlight_level((uint32_t)(now - last_input), busy);
         if (next_backlight != backlight) { bsp_display_backlight(next_backlight); backlight = next_backlight; }
-        if (!busy && travel_model_should_sleep((uint32_t)(now - last_input))) enter_deep_sleep();
+        if (!busy && travel_model_should_sleep((uint32_t)(now - last_input))) {
+            enter_deep_sleep();
+            last_input = now_ms(); /* Back off if the voice worker could not stop. */
+        }
 
         time_t current = time(NULL);
         if (current / 60 != last_minute / 60) {
@@ -485,9 +543,14 @@ void app_main(void) {
     s_progress_done = xSemaphoreCreateBinary();
     s_progress_gate = xSemaphoreCreateMutex();
     s_input = xQueueCreate(12, sizeof(app_event_t));
-    if (!s_input || !s_progress_done || !s_progress_gate || xTaskCreate(input_task, "koala_input", 4096, NULL, 5, NULL) != pdPASS) {
+    s_buttons = xQueueCreate(16, sizeof(app_event_t));
+    s_fallback_clicks = xQueueCreate(16, sizeof(uint32_t));
+    if (!s_input || !s_buttons || !s_fallback_clicks || !s_progress_done || !s_progress_gate ||
+        xTaskCreate(input_task, "koala_input", 4096, NULL, 5, &s_input_task) != pdPASS) {
         ESP_LOGE(TAG, "Input task allocation failed");
         if (s_input) { vQueueDelete(s_input); s_input = NULL; }
+        if (s_buttons) { vQueueDelete(s_buttons); s_buttons = NULL; }
+        if (s_fallback_clicks) { vQueueDelete(s_fallback_clicks); s_fallback_clicks = NULL; }
         return;
     }
     if (bsp_button_init(on_button, NULL) != ESP_OK) ESP_LOGE(TAG, "Buttons unavailable; homepage remains visible");
@@ -504,5 +567,5 @@ void app_main(void) {
     ESP_LOGI(TAG, "UI ready: free heap=%u, largest block=%u",
         (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
-    ESP_LOGI(TAG, "Ready: UP=schedule, DOWN=activities, hold OK=talk, hold UP=date, double UP=Wi-Fi, hold DOWN=sleep");
+    ESP_LOGI(TAG, "Ready: UP=schedule, DOWN=activities, OK click=talk/send, hold UP=date, double UP=Wi-Fi, hold DOWN=sleep");
 }

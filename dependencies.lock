@@ -36,7 +36,7 @@ dependencies:
       require: private
       version: '>=5.0'
     source:
-      registry_url: https://components.espressif.com
+      registry_url: https://components.espressif.com/
       type: service
     version: 1.7.19~2
   espressif/cmake_utilities:
@@ -90,38 +90,27 @@ dependencies:
       require: private
       version: '>=5.0'
     source:
-      registry_url: https://components.espressif.com
+      registry_url: https://components.espressif.com/
       type: service
     version: 1.8.0
   espressif/esp_xiaozhi:
-    component_hash: 8e2e8a32abee72b29fd1833990a033f07bc6e468867ece1176513da467292e3f
     dependencies:
     - name: espressif/cmake_utilities
-      registry_url: https://components.espressif.com
-      require: private
       version: 0.*
     - name: espressif/cjson
-      registry_url: https://components.espressif.com
-      require: private
       version: 1.*
     - name: espressif/esp_websocket_client
-      registry_url: https://components.espressif.com
-      require: private
       version: ^1.6.1
     - name: espressif/mcp-c-sdk
-      registry_url: https://components.espressif.com
-      require: private
+      require: public
       version: ^2.0.1
     - name: espressif/mqtt
-      registry_url: https://components.espressif.com
-      require: private
       version: 1.*
     - name: idf
-      require: private
       version: '>=5.5'
     source:
-      registry_url: https://components.espressif.com/
-      type: service
+      path: third_party/esp_xiaozhi
+      type: local
     version: 0.1.2
   espressif/mcp-c-sdk:
     component_hash: 58252f2ca194794f11aff0ff559b6c16cc57c0838d99558011c2f95eeae87e00
@@ -138,7 +127,7 @@ dependencies:
       require: private
       version: '>=5.4'
     source:
-      registry_url: https://components.espressif.com
+      registry_url: https://components.espressif.com/
       type: service
     version: 2.0.1
   espressif/mqtt:
@@ -148,7 +137,7 @@ dependencies:
       require: private
       version: '>=5.3'
     source:
-      registry_url: https://components.espressif.com
+      registry_url: https://components.espressif.com/
       type: service
     version: 1.1.0
   idf:
@@ -171,6 +160,6 @@ direct_dependencies:
 - espressif/esp_xiaozhi
 - idf
 - lvgl/lvgl
-manifest_hash: 1bdd961bd1c0b817f3fb52ae7c95f2a7fc58c82d0ba3b3d8e9bb8e49b164738b
+manifest_hash: 397ad8cdc64d83f41d1ba7e8a08f35bb7ce11eb05b2fcd786af4f4183883d946
 target: esp32c3
 version: 2.0.0

@@ -42,6 +42,9 @@ run_static_checks() {
         tests/test_voice_state_payload.c main/voice_state_payload.c \
         -o "${test_dir}/test_voice_state_payload"
     "${test_dir}/test_voice_state_payload"
+    "${CXX:-c++}" -std=c++17 -Wall -Wextra -Werror -pthread -Imain \
+        tests/test_voice_turn_gate.cpp -o "${test_dir}/test_voice_turn_gate"
+    "${test_dir}/test_voice_turn_gate"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_travel_animation.c main/travel_animation.c main/travel_model.c \
         -o "${test_dir}/test_travel_animation"
@@ -100,7 +103,7 @@ run_firmware_checks() (
     fi
 
     validation_build_dir="$(mktemp -d /tmp/ai-passport-firmware.XXXXXX)"
-    trap 'case "${validation_build_dir}" in /tmp/ai-passport-firmware.*) rm -rf -- "${validation_build_dir}" ;; esac' EXIT
+    trap 'python3 tools/normalize_component_lock.py; case "${validation_build_dir}" in /tmp/ai-passport-firmware.*) rm -rf -- "${validation_build_dir}" ;; esac' EXIT
 
     SDKCONFIG_DEFAULTS="${repo_root}/sdkconfig.defaults" \
         idf.py -B "${validation_build_dir}" \

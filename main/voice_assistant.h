@@ -39,8 +39,10 @@ void voice_assistant_refresh_progress(void);
 esp_err_t voice_assistant_init(voice_assistant_status_callback_t callback, void *context);
 void voice_assistant_set_network(bool online);
 bool voice_assistant_begin(const voice_state_snapshot_t *snapshot);
-void voice_assistant_end(void);
-void voice_assistant_prepare_sleep(void);
+/* Returns true only when a preparing or recording turn was stopped. */
+bool voice_assistant_end_if_active(void);
+/* Sleep is allowed only after the voice worker and PCM I/O have stopped. */
+bool voice_assistant_prepare_sleep(void);
 voice_assistant_status_t voice_assistant_get_status(void);
 
 #ifdef __cplusplus

@@ -15,6 +15,7 @@
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_opus_dec.h"
 #include "esp_opus_enc.h"
 #include "esp_xiaozhi_chat.h"
@@ -27,6 +28,7 @@
 #include "sdkconfig.h"
 #include "travel_model.h"
 #include "voice_wifi.h"
+#include "voice_turn_gate.h"
 
 namespace {
 
@@ -35,6 +37,10 @@ constexpr int kFrameDurationMs = 60;
 constexpr size_t kPcmSamples = kSampleRate * kFrameDurationMs / 1000;
 constexpr size_t kMaxOpusBytes = 1024;
 constexpr size_t kStatePayloadBytes = 896;
+constexpr uint32_t kMaxRecordingMs = 20000;
+constexpr uint32_t kMaxReplyMs = 60000;
+constexpr UBaseType_t kTxPacketQueueDepth = 24;
+constexpr size_t kTxPacketByteBudget = 4096;
 constexpr EventBits_t kNetworkOnline = BIT0;
 constexpr EventBits_t kCapturing = BIT1;
 constexpr EventBits_t kTransportConnected = BIT2;
@@ -43,18 +49,17 @@ constexpr EventBits_t kSendAllowed = BIT4;
 constexpr EventBits_t kDropPlayback = BIT5;
 constexpr EventBits_t kSpeaking = BIT6;
 constexpr EventBits_t kProgressRefresh = BIT7;
+constexpr EventBits_t kTurnFailure = BIT8;
 
 struct OpusPacket {
+    uint32_t turn;
     uint16_t size;
     uint8_t data[1];
 };
 
 enum class CommandType : uint8_t {
-    NetworkUp,
-    NetworkDown,
     Start,
     Stop,
-    Suspend,
 };
 
 struct Command {
@@ -70,6 +75,9 @@ QueueHandle_t s_commands;
 QueueHandle_t s_tx_packets;
 QueueHandle_t s_rx_packets;
 SemaphoreHandle_t s_suspend_done;
+SemaphoreHandle_t s_chat_gate;
+SemaphoreHandle_t s_capture_gate;
+SemaphoreHandle_t s_audio_gate;
 TaskHandle_t s_control_task;
 TaskHandle_t s_capture_task;
 TaskHandle_t s_sender_task;
@@ -81,33 +89,89 @@ int s_encoder_frame_bytes;
 int s_encoder_output_bytes;
 voice_assistant_status_callback_t s_status_callback;
 void *s_status_context;
-volatile voice_assistant_status_t s_status = VOICE_ASSISTANT_OFFLINE;
+std::atomic<voice_assistant_status_t> s_status{VOICE_ASSISTANT_OFFLINE};
 bool s_event_handler_registered;
 voice_progress_callback_t s_progress_callback;
 void *s_progress_context;
 std::atomic<uint32_t> s_requested_turn{0};
+std::atomic<uint32_t> s_active_turn{0};
+std::atomic<uint32_t> s_ending_turn{0};
 std::atomic<uint32_t> s_stop_fallback{0};
+std::atomic<uint32_t> s_failed_turn{0};
+std::atomic<uint32_t> s_capture_started_turn{0};
+std::atomic<uint32_t> s_capture_started_ms{0};
+std::atomic<uint32_t> s_playback_epoch{1};
+std::atomic<bool> s_network_dirty{false};
+std::atomic<bool> s_connection_invalid{false};
+std::atomic<bool> s_suspend_requested{false};
+std::atomic<bool> s_chat_closing{false};
+std::atomic<uint32_t> s_chat_generation{0};
+std::atomic<size_t> s_tx_packet_bytes{0};
 uint32_t s_running_turn; /* control worker only */
 bool s_running_listening;
+uint32_t s_reply_started_ms; /* control worker only */
+uint32_t s_reply_generation; /* control worker only */
+
+void log_resource_margin(const char *phase) {
+    ESP_LOGI(TAG, "%s: heap=%u largest=%u stack ctrl=%u mic=%u send=%u play=%u",
+             phase, (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+             (unsigned)uxTaskGetStackHighWaterMark(s_control_task),
+             (unsigned)uxTaskGetStackHighWaterMark(s_capture_task),
+             (unsigned)uxTaskGetStackHighWaterMark(s_sender_task),
+             (unsigned)uxTaskGetStackHighWaterMark(s_playback_task));
+}
 
 void publish(voice_assistant_status_t status) {
-    s_status = status;
+    if (s_status.exchange(status) == status) return;
     if (s_status_callback) s_status_callback(status, s_status_context);
 }
 
-OpusPacket *copy_packet(const uint8_t *data, size_t size) {
+bool turn_current(uint32_t turn) {
+    return voice_turn_current(s_active_turn, turn) &&
+        (xEventGroupGetBits(s_events) & kNetworkOnline) && !s_suspend_requested.load();
+}
+bool end_turn(uint32_t turn);
+
+void fail_turn(uint32_t turn) {
+    if (!turn) return;
+    uint32_t no_end = 0;
+    while (!s_ending_turn.compare_exchange_weak(no_end, turn)) {
+        no_end = 0;
+        vTaskDelay(1); /* Let the lower-priority input task finish end_turn(). */
+    }
+    bool active = voice_turn_release(s_active_turn, turn);
+    if (active) xEventGroupClearBits(s_events, kCapturing | kSendAllowed);
+    if (active || s_capture_started_turn.load() == turn) {
+        s_failed_turn.store(turn);
+        xEventGroupSetBits(s_events, kTurnFailure);
+    }
+    s_ending_turn.store(0);
+}
+
+OpusPacket *copy_packet(const uint8_t *data, size_t size, uint32_t turn = 0) {
     if (!data || !size || size > kMaxOpusBytes) return nullptr;
     auto *packet = static_cast<OpusPacket *>(std::malloc(sizeof(OpusPacket) + size));
     if (!packet) return nullptr;
+    packet->turn = turn;
     packet->size = static_cast<uint16_t>(size);
     std::memcpy(packet->data, data, size);
     return packet;
 }
 
-void clear_packet_queue(QueueHandle_t queue) {
+void free_tx_packet(OpusPacket *packet) {
+    if (!packet) return;
+    s_tx_packet_bytes.fetch_sub(packet->size);
+    std::free(packet);
+}
+
+void clear_packet_queue(QueueHandle_t queue, bool outgoing = false) {
     if (!queue) return;
     OpusPacket *packet = nullptr;
-    while (xQueueReceive(queue, &packet, 0) == pdTRUE) std::free(packet);
+    while (xQueueReceive(queue, &packet, 0) == pdTRUE) {
+        if (outgoing) free_tx_packet(packet);
+        else std::free(packet);
+    }
 }
 
 void queue_latest_packet(QueueHandle_t queue, OpusPacket *packet) {
@@ -125,47 +189,55 @@ void reset_audio_flow() {
     if (!s_events) return;
     xEventGroupClearBits(s_events, kCapturing | kSendAllowed | kChannelReady | kSpeaking);
     xEventGroupSetBits(s_events, kDropPlayback);
-    clear_packet_queue(s_tx_packets);
+    clear_packet_queue(s_tx_packets, true);
     clear_packet_queue(s_rx_packets);
 }
 
-void protocol_event(esp_xiaozhi_chat_event_t event, void *event_data, void *) {
+void protocol_event(esp_xiaozhi_chat_event_t event, void *event_data, void *context) {
+    if ((uint32_t)(uintptr_t)context != s_chat_generation.load() || s_chat_closing.load()) return;
     switch (event) {
     case ESP_XIAOZHI_CHAT_EVENT_CHAT_SPEECH_STARTED:
         xEventGroupSetBits(s_events, kSpeaking);
-        publish(VOICE_ASSISTANT_SPEAKING);
+        if (!s_active_turn.load()) publish(VOICE_ASSISTANT_SPEAKING);
         break;
     case ESP_XIAOZHI_CHAT_EVENT_CHAT_SPEECH_STOPPED:
         xEventGroupClearBits(s_events, kSpeaking);
         xEventGroupSetBits(s_events, kProgressRefresh);
-        if (xEventGroupGetBits(s_events) & kNetworkOnline) publish(VOICE_ASSISTANT_READY);
+        if (!s_active_turn.load() && s_status.load() == VOICE_ASSISTANT_SPEAKING &&
+            (xEventGroupGetBits(s_events) & kNetworkOnline)) publish(VOICE_ASSISTANT_READY);
         break;
     case ESP_XIAOZHI_CHAT_EVENT_CHAT_TTS_STATE: {
         auto *state = static_cast<esp_xiaozhi_chat_tts_state_t *>(event_data);
         if (!state) break;
         if (state->state == ESP_XIAOZHI_CHAT_TTS_STATE_START) {
             xEventGroupSetBits(s_events, kSpeaking);
-            publish(VOICE_ASSISTANT_SPEAKING);
+            if (!s_active_turn.load()) publish(VOICE_ASSISTANT_SPEAKING);
         } else if (state->state == ESP_XIAOZHI_CHAT_TTS_STATE_STOP) {
             xEventGroupClearBits(s_events, kSpeaking);
             xEventGroupSetBits(s_events, kProgressRefresh);
-            if (xEventGroupGetBits(s_events) & kNetworkOnline) publish(VOICE_ASSISTANT_READY);
+            if (!s_active_turn.load() && s_status.load() == VOICE_ASSISTANT_SPEAKING &&
+                (xEventGroupGetBits(s_events) & kNetworkOnline)) publish(VOICE_ASSISTANT_READY);
         }
         break;
     }
     case ESP_XIAOZHI_CHAT_EVENT_CHAT_ERROR:
+        if (s_chat_closing.load()) break;
         xEventGroupSetBits(s_events, kProgressRefresh);
-        publish(VOICE_ASSISTANT_ERROR);
+        /* Protocol errors are scoped to this connection, not to a particular
+         * question. An old reply can fail after the next turn starts. The
+         * synchronous setup/send calls own the active turn's failure path. */
+        if (!s_active_turn.load()) publish(VOICE_ASSISTANT_ERROR);
         break;
     default:
         break;  // STT/LLM text is intentionally not rendered on the fixed-glyph UI.
     }
 }
 
-void incoming_audio(const uint8_t *data, int length, void *) {
+void incoming_audio(const uint8_t *data, int length, void *context) {
+    if ((uint32_t)(uintptr_t)context != s_chat_generation.load() || s_chat_closing.load()) return;
     if (!data || length <= 0 || (size_t)length > kMaxOpusBytes ||
         (xEventGroupGetBits(s_events) & kDropPlayback)) return;
-    queue_latest_packet(s_rx_packets, copy_packet(data, (size_t)length));
+    queue_latest_packet(s_rx_packets, copy_packet(data, (size_t)length, s_playback_epoch.load()));
 }
 
 void system_event(void *, esp_event_base_t, int32_t event_id, void *) {
@@ -175,15 +247,19 @@ void system_event(void *, esp_event_base_t, int32_t event_id, void *) {
         break;
     case ESP_XIAOZHI_CHAT_EVENT_DISCONNECTED:
     case ESP_XIAOZHI_CHAT_EVENT_SERVER_GOODBYE:
-        xEventGroupClearBits(s_events, kTransportConnected | kChannelReady | kSendAllowed | kSpeaking);
-        xEventGroupSetBits(s_events, kDropPlayback | kProgressRefresh);
-        if (xEventGroupGetBits(s_events) & kNetworkOnline) publish(VOICE_ASSISTANT_ERROR);
+        /* These global events have no chat identity. Audio sends and the
+         * instance-scoped callback detect failure of the current session. */
+        xEventGroupClearBits(s_events, kTransportConnected | kChannelReady);
+        xEventGroupSetBits(s_events, kProgressRefresh);
         break;
     case ESP_XIAOZHI_CHAT_EVENT_AUDIO_CHANNEL_OPENED:
-        xEventGroupSetBits(s_events, kChannelReady);
+        /* The synchronous open call marks readiness after server hello. A
+         * delayed global event has no chat identity and cannot grant it. */
         break;
     case ESP_XIAOZHI_CHAT_EVENT_AUDIO_CHANNEL_CLOSED:
-        xEventGroupClearBits(s_events, kChannelReady | kSendAllowed);
+        /* Like CONNECTED, this event is not tagged with a chat instance.
+         * Let an actual send failure stop the current capture. */
+        xEventGroupClearBits(s_events, kChannelReady);
         break;
     default:
         break;
@@ -244,6 +320,7 @@ esp_err_t initialize_chat() {
     if (s_chat && (xEventGroupGetBits(s_events) & kTransportConnected)) return ESP_OK;
     if (s_chat) deinitialize_chat();
     if (!(xEventGroupGetBits(s_events) & kNetworkOnline)) return ESP_ERR_INVALID_STATE;
+    s_chat_closing.store(false);
 
     esp_xiaozhi_chat_info_t info = {};
     esp_err_t result = esp_xiaozhi_chat_get_info(&info);
@@ -259,29 +336,43 @@ esp_err_t initialize_chat() {
     esp_xiaozhi_chat_config_t config = ESP_XIAOZHI_CHAT_DEFAULT_CONFIG();
     config.audio_callback = incoming_audio;
     config.event_callback = protocol_event;
+    uint32_t generation = s_chat_generation.fetch_add(1) + 1;
+    config.audio_callback_ctx = reinterpret_cast<void *>(static_cast<uintptr_t>(generation));
+    config.event_callback_ctx = reinterpret_cast<void *>(static_cast<uintptr_t>(generation));
     config.has_websocket_config = true;
     config.has_mqtt_config = false;
     result = esp_xiaozhi_chat_init(&config, &s_chat);
     if (result == ESP_OK) result = esp_xiaozhi_chat_start(s_chat);
     esp_xiaozhi_chat_free_info(&info);
     if (result != ESP_OK) {
-        if (s_chat) esp_xiaozhi_chat_deinit(s_chat);
+        s_chat_closing.store(true);
+        s_chat_generation.fetch_add(1);
+        if (s_chat) (void)esp_xiaozhi_chat_deinit(s_chat);
         s_chat = 0;
+        xEventGroupClearBits(s_events, kTransportConnected | kChannelReady);
         return result;
     }
     EventBits_t bits = xEventGroupWaitBits(s_events, kTransportConnected, pdFALSE, pdTRUE,
                                            pdMS_TO_TICKS(6000));
-    return (bits & kTransportConnected) ? ESP_OK : ESP_ERR_TIMEOUT;
+    if (bits & kTransportConnected) return ESP_OK;
+    deinitialize_chat();
+    return ESP_ERR_TIMEOUT;
 }
 
 void deinitialize_chat() {
     s_running_listening = false;
+    s_reply_started_ms = 0;
     reset_audio_flow();
-    if (!s_chat) return;
-    (void)esp_xiaozhi_chat_close_audio_channel(s_chat);
-    (void)esp_xiaozhi_chat_stop(s_chat);
-    (void)esp_xiaozhi_chat_deinit(s_chat);
-    s_chat = 0;
+    s_chat_closing.store(true);
+    s_chat_generation.fetch_add(1);
+    xSemaphoreTake(s_chat_gate, portMAX_DELAY);
+    if (s_chat) {
+        (void)esp_xiaozhi_chat_close_audio_channel(s_chat);
+        (void)esp_xiaozhi_chat_stop(s_chat);
+        (void)esp_xiaozhi_chat_deinit(s_chat);
+        s_chat = 0;
+    }
+    xSemaphoreGive(s_chat_gate);
     xEventGroupClearBits(s_events, kTransportConnected);
 }
 
@@ -405,12 +496,16 @@ bool synchronize_time() {
     else ESP_LOGW(TAG, "Trip service clock unavailable; date remains unverified");
     return valid;
 }
-void synchronize_progress() {
-    if (!s_progress_callback || !(xEventGroupGetBits(s_events) & kNetworkOnline)) return;
+void synchronize_progress(uint32_t turn = 0) {
+    if (!s_progress_callback || s_suspend_requested.load() ||
+        !(xEventGroupGetBits(s_events) & kNetworkOnline)) return;
     char url[384];
     if (!state_endpoint_url("activity-progress", url, sizeof(url))) return;
     /* Bound one flush to the catalogue size. A failed request remains persisted for reconnect. */
     for (unsigned i = 0; i < TRAVEL_ACTIVITY_MAX; ++i) {
+        if (turn && !turn_current(turn)) return;
+        if (s_suspend_requested.load()) return;
+        if (!(xEventGroupGetBits(s_events) & kNetworkOnline)) return;
         voice_progress_request_t request = {}; request.kind = VOICE_PROGRESS_NEXT;
         if (!s_progress_callback(&request, s_progress_context) || !request.has_operation) break;
         const auto &op = request.operation;
@@ -438,8 +533,12 @@ void synchronize_progress() {
                 (void)deliver_progress(snapshot, VOICE_PROGRESS_PAUSE, &op);
         }
         cJSON_Delete(response);
+        if (turn && !turn_current(turn)) return;
         if (!applied) break;
     }
+    if (turn && !turn_current(turn)) return;
+    if (s_suspend_requested.load()) return;
+    if (!(xEventGroupGetBits(s_events) & kNetworkOnline)) return;
     int status = 0; cJSON *response = nullptr;
     if (http_request(url, HTTP_METHOD_GET, nullptr, 0, &status, &response) == ESP_OK && status == 200)
         (void)deliver_progress(response, VOICE_PROGRESS_SNAPSHOT);
@@ -456,19 +555,26 @@ esp_err_t upload_state(const char *payload, size_t size) {
 }
 
 esp_err_t start_turn(const Command &command) {
+    if (!turn_current(command.turn)) return ESP_ERR_INVALID_STATE;
     s_running_listening = false;
+    s_reply_started_ms = 0;
     publish(VOICE_ASSISTANT_SYNCING);
     xEventGroupSetBits(s_events, kDropPlayback);
     clear_packet_queue(s_rx_packets);
     if (s_chat && (xEventGroupGetBits(s_events) & kChannelReady)) {
+        xSemaphoreTake(s_chat_gate, portMAX_DELAY);
         (void)esp_xiaozhi_chat_send_abort_speaking(
             s_chat, ESP_XIAOZHI_CHAT_ABORT_SPEAKING_REASON_STOP_LISTENING);
+        xSemaphoreGive(s_chat_gate);
     }
 
-    synchronize_progress();
+    synchronize_progress(command.turn);
+    if (!turn_current(command.turn)) return ESP_ERR_INVALID_STATE;
     esp_err_t result = upload_state(command.payload, command.payload_size);
+    if (!turn_current(command.turn)) return ESP_ERR_INVALID_STATE;
     if (result == ESP_OK) result = initialize_chat();
     if (result != ESP_OK) return result;
+    if (!turn_current(command.turn)) return ESP_ERR_INVALID_STATE;
 
     if (!(xEventGroupGetBits(s_events) & kChannelReady)) {
         esp_xiaozhi_chat_audio_t audio = {};
@@ -476,34 +582,86 @@ esp_err_t start_turn(const Command &command) {
         audio.sample_rate = kSampleRate;
         audio.channels = 1;
         audio.frame_duration = kFrameDurationMs;
+        xSemaphoreTake(s_chat_gate, portMAX_DELAY);
         result = esp_xiaozhi_chat_open_audio_channel(s_chat, &audio, nullptr, 0);
+        xSemaphoreGive(s_chat_gate);
         if (result != ESP_OK) return result;
-        EventBits_t bits = xEventGroupWaitBits(s_events, kChannelReady, pdFALSE, pdTRUE,
-                                               pdMS_TO_TICKS(3000));
-        if (!(bits & kChannelReady)) return ESP_ERR_TIMEOUT;
+        xEventGroupSetBits(s_events, kChannelReady);
+        if (!turn_current(command.turn)) return ESP_ERR_INVALID_STATE;
     }
+    if (!turn_current(command.turn)) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(s_chat_gate, portMAX_DELAY);
     result = esp_xiaozhi_chat_send_start_listening(
         s_chat, ESP_XIAOZHI_CHAT_LISTENING_MODE_MANUAL);
-    if (result == ESP_OK) {
-        s_running_listening = true;
-        xEventGroupClearBits(s_events, kDropPlayback | kSpeaking);
-        xEventGroupSetBits(s_events, kSendAllowed);
-        publish(VOICE_ASSISTANT_LISTENING);
+    xSemaphoreGive(s_chat_gate);
+    if (result != ESP_OK) return result;
+    s_running_listening = true;
+    if (!turn_current(command.turn)) return ESP_ERR_INVALID_STATE;
+
+    /* The microphone stays off until the server is listening and the child
+     * has heard the cue. Keep a concurrent old TTS frame out of the cue. */
+    int16_t cue[320];
+    for (size_t i = 0; i < 320; ++i) cue[i] = (i / 8) & 1 ? 1500 : -1500;
+    xSemaphoreTake(s_audio_gate, portMAX_DELAY);
+    for (int i = 0; i < 4 && turn_current(command.turn); ++i) {
+        result = bsp_audio_write(cue, sizeof(cue));
+        if (result != ESP_OK) break;
     }
-    return result;
+    xSemaphoreGive(s_audio_gate);
+    if (result != ESP_OK) return result;
+    if (!turn_current(command.turn)) return ESP_ERR_INVALID_STATE;
+
+    s_capture_started_ms.store((uint32_t)(esp_timer_get_time() / 1000));
+    s_capture_started_turn.store(command.turn);
+    xEventGroupClearBits(s_events, kSpeaking);
+    xEventGroupSetBits(s_events, kSendAllowed | kCapturing);
+    if (!turn_current(command.turn)) {
+        xEventGroupClearBits(s_events, kCapturing | kSendAllowed);
+        return ESP_ERR_INVALID_STATE;
+    }
+    publish(VOICE_ASSISTANT_LISTENING);
+    log_resource_margin("capture started");
+    return ESP_OK;
 }
 
 void stop_turn() {
-    /* The release handler already stopped that capture. A newer button press may now be
-     * recording its next turn: an older queued Stop must never clear that capture flag. */
     if (!s_chat || !s_running_listening) return;
-    for (int attempt = 0; attempt < 12 && s_requested_turn.load() == s_running_turn &&
-         uxQueueMessagesWaiting(s_tx_packets); ++attempt)
+    /* A canceled preparation has no speech to send. A newer turn must not
+     * inherit this channel or receive the old Stop. */
+    if (s_capture_started_turn.load() != s_running_turn ||
+        s_requested_turn.load() != s_running_turn || s_failed_turn.load() == s_running_turn) {
+        deinitialize_chat();
+        return;
+    }
+    xSemaphoreTake(s_capture_gate, portMAX_DELAY);
+    xSemaphoreGive(s_capture_gate);
+    for (int attempt = 0; attempt < 30 && uxQueueMessagesWaiting(s_tx_packets); ++attempt)
         vTaskDelay(pdMS_TO_TICKS(50));
-    (void)esp_xiaozhi_chat_send_stop_listening(s_chat);
-    s_running_listening = false;
+    if (uxQueueMessagesWaiting(s_tx_packets) || s_requested_turn.load() != s_running_turn) {
+        deinitialize_chat();
+        if (!s_active_turn.load()) publish(VOICE_ASSISTANT_ERROR);
+        return;
+    }
     xEventGroupClearBits(s_events, kSendAllowed);
-    publish(VOICE_ASSISTANT_THINKING);
+    xSemaphoreTake(s_chat_gate, portMAX_DELAY); /* Wait for an in-flight sender packet. */
+    bool failed = s_failed_turn.load() == s_running_turn;
+    if (!failed) {
+        s_reply_started_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        s_reply_generation = s_chat_generation.load();
+        clear_packet_queue(s_rx_packets);
+        xEventGroupClearBits(s_events, kDropPlayback);
+    }
+    esp_err_t result = failed ? ESP_FAIL : esp_xiaozhi_chat_send_stop_listening(s_chat);
+    xSemaphoreGive(s_chat_gate);
+    if (result != ESP_OK) {
+        deinitialize_chat();
+        if (!s_active_turn.load()) publish(VOICE_ASSISTANT_ERROR);
+        return;
+    }
+    s_running_listening = false;
+    log_resource_margin("capture stopped");
+    if (!s_active_turn.load() && s_status.load() != VOICE_ASSISTANT_SPEAKING)
+        publish(VOICE_ASSISTANT_THINKING);
 }
 
 void complete_pending_stop() {
@@ -523,6 +681,51 @@ void control_task(void *) {
     TickType_t last_clock_attempt = 0;
     bool clock_attempted = false;
     for (;;) {
+        if (s_suspend_requested.load()) {
+            deinitialize_chat();
+            xSemaphoreGive(s_suspend_done);
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+        if (s_connection_invalid.exchange(false)) deinitialize_chat();
+        if (!(xEventGroupGetBits(s_events) & kNetworkOnline) && s_chat) {
+            deinitialize_chat();
+            if (!s_active_turn.load()) publish(VOICE_ASSISTANT_OFFLINE);
+        }
+        if (s_network_dirty.exchange(false)) {
+            if (xEventGroupGetBits(s_events) & kNetworkOnline) {
+                last_clock_attempt = xTaskGetTickCount(); clock_attempted = true;
+                (void)synchronize_time();
+                synchronize_progress();
+                if (!s_suspend_requested.load()) {
+                    esp_err_t result = initialize_chat();
+                    if (result != ESP_OK) ESP_LOGW(TAG, "Voice server pre-connect failed: %s", esp_err_to_name(result));
+                    if (!s_active_turn.load()) publish(!(xEventGroupGetBits(s_events) & kNetworkOnline) ?
+                        VOICE_ASSISTANT_OFFLINE : result == ESP_OK ? VOICE_ASSISTANT_READY : VOICE_ASSISTANT_ERROR);
+                }
+            } else {
+                deinitialize_chat();
+                if (!s_active_turn.load()) publish(VOICE_ASSISTANT_OFFLINE);
+            }
+        }
+        if (xEventGroupGetBits(s_events) & kTurnFailure) {
+            xEventGroupClearBits(s_events, kTurnFailure);
+            uint32_t failed = s_failed_turn.exchange(0);
+            if (failed == s_running_turn) {
+                deinitialize_chat();
+                if (!s_active_turn.load()) publish(VOICE_ASSISTANT_ERROR);
+            }
+        }
+        voice_assistant_status_t reply_status = s_status.load();
+        if (voice_reply_timed_out(s_reply_started_ms, s_reply_generation,
+                                  s_chat_generation.load(), s_active_turn.load(),
+                                  reply_status == VOICE_ASSISTANT_THINKING ||
+                                  reply_status == VOICE_ASSISTANT_SPEAKING,
+                                  (uint32_t)(esp_timer_get_time() / 1000), kMaxReplyMs)) {
+            ESP_LOGW(TAG, "Voice reply timed out");
+            deinitialize_chat();
+            publish(VOICE_ASSISTANT_ERROR);
+        }
         complete_pending_stop();
         if (xQueueReceive(s_commands, &command, pdMS_TO_TICKS(100)) != pdTRUE) {
             TickType_t now = xTaskGetTickCount();
@@ -539,37 +742,31 @@ void control_task(void *) {
             continue;
         }
         switch (command.type) {
-        case CommandType::NetworkUp:
-            last_clock_attempt = xTaskGetTickCount(); clock_attempted = true;
-            (void)synchronize_time();
-            synchronize_progress();
-            if (!s_chat) {
-                esp_err_t result = initialize_chat();
-                if (result != ESP_OK) ESP_LOGW(TAG, "Voice server pre-connect failed: %s", esp_err_to_name(result));
-            }
-            publish(s_chat ? VOICE_ASSISTANT_READY : VOICE_ASSISTANT_ERROR);
-            break;
-        case CommandType::NetworkDown:
-            deinitialize_chat();
-            publish(VOICE_ASSISTANT_OFFLINE);
-            break;
         case CommandType::Start: {
+            if (s_running_listening) deinitialize_chat();
             s_running_turn = command.turn;
+            if (!turn_current(command.turn)) {
+                if (!s_active_turn.load()) publish((xEventGroupGetBits(s_events) & kNetworkOnline) ?
+                                                  VOICE_ASSISTANT_READY : VOICE_ASSISTANT_OFFLINE);
+                break;
+            }
             esp_err_t result = start_turn(command);
             if (result != ESP_OK) {
-                ESP_LOGE(TAG, "Unable to start voice turn: %s", esp_err_to_name(result));
+                bool canceled = !turn_current(command.turn) &&
+                    s_failed_turn.load() != command.turn;
+                if (!canceled) ESP_LOGE(TAG, "Unable to start voice turn: %s", esp_err_to_name(result));
+                uint32_t expected = command.turn;
+                (void)s_active_turn.compare_exchange_strong(expected, 0);
                 deinitialize_chat();
-                publish(VOICE_ASSISTANT_ERROR);
-                xEventGroupSetBits(s_events, kProgressRefresh);
+                if (!s_active_turn.load()) publish(canceled ?
+                    ((xEventGroupGetBits(s_events) & kNetworkOnline) ? VOICE_ASSISTANT_READY : VOICE_ASSISTANT_OFFLINE) :
+                    VOICE_ASSISTANT_ERROR);
+                if (!canceled) xEventGroupSetBits(s_events, kProgressRefresh);
             }
             break;
         }
         case CommandType::Stop:
             if (command.turn == s_running_turn) stop_turn();
-            break;
-        case CommandType::Suspend:
-            deinitialize_chat();
-            xSemaphoreGive(s_suspend_done);
             break;
         }
     }
@@ -578,13 +775,35 @@ void control_task(void *) {
 void capture_task(void *) {
     int16_t pcm[kPcmSamples];
     uint8_t encoded[kMaxOpusBytes];
+    uint32_t observed_turn = 0;
+    unsigned read_failures = 0;
     for (;;) {
         if (!(xEventGroupGetBits(s_events) & kCapturing)) {
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
+        uint32_t turn = s_capture_started_turn.load();
+        if (turn != observed_turn) { observed_turn = turn; read_failures = 0; }
+        if (voice_turn_expired(s_capture_started_ms.load(),
+                               (uint32_t)(esp_timer_get_time() / 1000), kMaxRecordingMs)) {
+            (void)end_turn(turn);
+            continue;
+        }
+        xSemaphoreTake(s_capture_gate, portMAX_DELAY);
+        if (!(xEventGroupGetBits(s_events) & kCapturing) || !turn_current(turn)) {
+            xSemaphoreGive(s_capture_gate);
+            continue;
+        }
         if (bsp_audio_read(pcm, sizeof(pcm)) != ESP_OK) {
+            if (++read_failures >= 3) fail_turn(turn);
+            xSemaphoreGive(s_capture_gate);
+            if (read_failures >= 3) continue;
             vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+        read_failures = 0;
+        if (!(xEventGroupGetBits(s_events) & kCapturing) || !turn_current(turn)) {
+            xSemaphoreGive(s_capture_gate);
             continue;
         }
         esp_audio_enc_in_frame_t input = {
@@ -594,8 +813,28 @@ void capture_task(void *) {
         output.buffer = encoded;
         output.len = sizeof(encoded);
         if (esp_opus_enc_process(s_encoder, &input, &output) != ESP_AUDIO_ERR_OK ||
-            output.encoded_bytes == 0 || output.encoded_bytes > kMaxOpusBytes) continue;
-        queue_latest_packet(s_tx_packets, copy_packet(encoded, output.encoded_bytes));
+            output.encoded_bytes > kMaxOpusBytes) {
+            fail_turn(turn);
+            xSemaphoreGive(s_capture_gate);
+            continue;
+        }
+        if (output.encoded_bytes && (xEventGroupGetBits(s_events) & kCapturing) && turn_current(turn)) {
+            size_t packet_size = output.encoded_bytes;
+            if (!voice_packet_budget_reserve(s_tx_packet_bytes, packet_size, kTxPacketByteBudget)) {
+                fail_turn(turn);
+                xSemaphoreGive(s_capture_gate);
+                continue;
+            }
+            OpusPacket *packet = copy_packet(encoded, packet_size, turn);
+            if (!packet || xQueueSend(s_tx_packets, &packet, 0) != pdTRUE) {
+                if (packet) free_tx_packet(packet);
+                else s_tx_packet_bytes.fetch_sub(packet_size);
+                fail_turn(turn);
+                xSemaphoreGive(s_capture_gate);
+                continue;
+            }
+        }
+        xSemaphoreGive(s_capture_gate);
     }
 }
 
@@ -606,15 +845,24 @@ void sender_task(void *) {
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
-        if (xQueueReceive(s_tx_packets, &packet, pdMS_TO_TICKS(60)) == pdTRUE) {
-            if (packet && s_chat) {
-                esp_err_t result = esp_xiaozhi_chat_send_audio_data(
-                    s_chat, reinterpret_cast<const char *>(packet->data), packet->size);
-                if (result != ESP_OK) ESP_LOGW(TAG, "Audio send failed: %s", esp_err_to_name(result));
+        xSemaphoreTake(s_chat_gate, portMAX_DELAY);
+        bool sending = (xEventGroupGetBits(s_events) & kSendAllowed) &&
+                       xQueueReceive(s_tx_packets, &packet, 0) == pdTRUE;
+        bool stale = sending && packet &&
+                     !voice_turn_packet_current(packet->turn, s_capture_started_turn.load());
+        esp_err_t result = sending && !stale && !s_chat ? ESP_ERR_INVALID_STATE : ESP_OK;
+        if (sending && !stale && packet && s_chat)
+            result = esp_xiaozhi_chat_send_audio_data(
+                s_chat, reinterpret_cast<const char *>(packet->data), packet->size);
+        if (sending && !stale && result != ESP_OK) fail_turn(packet->turn);
+        xSemaphoreGive(s_chat_gate);
+        if (sending) {
+            if (!stale && result != ESP_OK) {
+                ESP_LOGW(TAG, "Audio send failed: %s", esp_err_to_name(result));
             }
-            std::free(packet);
+            free_tx_packet(packet);
             packet = nullptr;
-        }
+        } else vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
 
@@ -624,7 +872,8 @@ void playback_task(void *) {
     for (;;) {
         if (xQueueReceive(s_rx_packets, &packet, portMAX_DELAY) != pdTRUE) continue;
         if (!packet) continue;
-        if (xEventGroupGetBits(s_events) & kDropPlayback) {
+        if ((xEventGroupGetBits(s_events) & kDropPlayback) ||
+            packet->turn != s_playback_epoch.load()) {
             std::free(packet); packet = nullptr; continue;
         }
         esp_audio_dec_in_raw_t input = {
@@ -637,7 +886,11 @@ void playback_task(void *) {
         esp_audio_dec_info_t info = {};
         if (esp_opus_dec_decode(s_decoder, &input, &output, &info) == ESP_AUDIO_ERR_OK &&
             output.decoded_size && !(xEventGroupGetBits(s_events) & kDropPlayback)) {
-            (void)bsp_audio_write(pcm, output.decoded_size);
+            xSemaphoreTake(s_audio_gate, portMAX_DELAY);
+            if (!(xEventGroupGetBits(s_events) & kDropPlayback) &&
+                packet->turn == s_playback_epoch.load())
+                (void)bsp_audio_write(pcm, output.decoded_size);
+            xSemaphoreGive(s_audio_gate);
         }
         std::free(packet);
         packet = nullptr;
@@ -654,6 +907,22 @@ bool enqueue(CommandType type, const char *payload = nullptr, size_t payload_siz
     return xQueueSend(s_commands, &command, 0) == pdTRUE;
 }
 
+bool end_turn(uint32_t turn) {
+    if (!s_events || !turn) return false;
+    uint32_t no_end = 0;
+    if (!s_ending_turn.compare_exchange_strong(no_end, turn)) return false;
+    if (!voice_turn_release(s_active_turn, turn)) {
+        s_ending_turn.store(0);
+        return false;
+    }
+    xEventGroupClearBits(s_events, kCapturing);
+    if (!enqueue(CommandType::Stop, nullptr, 0, turn)) s_stop_fallback.store(turn);
+    publish(s_capture_started_turn.load() == turn ? VOICE_ASSISTANT_THINKING :
+            ((xEventGroupGetBits(s_events) & kNetworkOnline) ? VOICE_ASSISTANT_READY : VOICE_ASSISTANT_OFFLINE));
+    s_ending_turn.store(0);
+    return true;
+}
+
 void cleanup_initialization() {
     if (s_playback_task) { vTaskDelete(s_playback_task); s_playback_task = nullptr; }
     if (s_sender_task) { vTaskDelete(s_sender_task); s_sender_task = nullptr; }
@@ -668,8 +937,11 @@ void cleanup_initialization() {
     if (s_encoder) { esp_opus_enc_close(s_encoder); s_encoder = nullptr; }
     (void)bsp_audio_sleep();
     if (s_suspend_done) { vSemaphoreDelete(s_suspend_done); s_suspend_done = nullptr; }
+    if (s_audio_gate) { vSemaphoreDelete(s_audio_gate); s_audio_gate = nullptr; }
+    if (s_capture_gate) { vSemaphoreDelete(s_capture_gate); s_capture_gate = nullptr; }
+    if (s_chat_gate) { vSemaphoreDelete(s_chat_gate); s_chat_gate = nullptr; }
     if (s_rx_packets) { clear_packet_queue(s_rx_packets); vQueueDelete(s_rx_packets); s_rx_packets = nullptr; }
-    if (s_tx_packets) { clear_packet_queue(s_tx_packets); vQueueDelete(s_tx_packets); s_tx_packets = nullptr; }
+    if (s_tx_packets) { clear_packet_queue(s_tx_packets, true); vQueueDelete(s_tx_packets); s_tx_packets = nullptr; }
     if (s_commands) { vQueueDelete(s_commands); s_commands = nullptr; }
     if (s_events) { vEventGroupDelete(s_events); s_events = nullptr; }
 }
@@ -684,7 +956,11 @@ extern "C" esp_err_t voice_assistant_init(voice_assistant_status_callback_t call
     s_events = xEventGroupCreate();
     s_commands = xQueueCreate(4, sizeof(Command));
     s_suspend_done = xSemaphoreCreateBinary();
-    if (!s_events || !s_commands || !s_suspend_done) {
+    s_chat_gate = xSemaphoreCreateMutex();
+    s_capture_gate = xSemaphoreCreateMutex();
+    s_audio_gate = xSemaphoreCreateMutex();
+    if (!s_events || !s_commands || !s_suspend_done || !s_chat_gate ||
+        !s_capture_gate || !s_audio_gate) {
         cleanup_initialization();
         return ESP_ERR_NO_MEM;
     }
@@ -697,9 +973,9 @@ extern "C" esp_err_t voice_assistant_init(voice_assistant_status_callback_t call
         cleanup_initialization();
         return result;
     }
-    // Opus needs a large contiguous block. Allocate it before packet queues,
-    // while retaining a bounded speech pre-roll and playback queue on the C3.
-    s_tx_packets = xQueueCreate(24, sizeof(OpusPacket *));
+    // Opus needs a large contiguous block. The 4 KiB packet budget limits
+    // queued audio on the C3 while 24 short frames absorb brief Wi-Fi jitter.
+    s_tx_packets = xQueueCreate(kTxPacketQueueDepth, sizeof(OpusPacket *));
     s_rx_packets = xQueueCreate(8, sizeof(OpusPacket *));
     if (!s_tx_packets || !s_rx_packets) {
         cleanup_initialization();
@@ -733,8 +1009,14 @@ extern "C" void voice_assistant_set_network(bool online) {
     bool was_online = (xEventGroupGetBits(s_events) & kNetworkOnline) != 0;
     if (was_online == online) return;
     if (online) xEventGroupSetBits(s_events, kNetworkOnline);
-    else xEventGroupClearBits(s_events, kNetworkOnline);
-    (void)enqueue(online ? CommandType::NetworkUp : CommandType::NetworkDown);
+    else {
+        xEventGroupClearBits(s_events, kNetworkOnline | kCapturing | kSendAllowed |
+                           kTransportConnected | kChannelReady);
+        s_active_turn.store(0);
+        s_connection_invalid.store(true);
+        publish(VOICE_ASSISTANT_OFFLINE);
+    }
+    s_network_dirty.store(true);
 }
 
 extern "C" bool voice_assistant_begin(const voice_state_snapshot_t *snapshot) {
@@ -742,43 +1024,67 @@ extern "C" bool voice_assistant_begin(const voice_state_snapshot_t *snapshot) {
         publish(VOICE_ASSISTANT_OFFLINE);
         return false;
     }
-    if (xEventGroupGetBits(s_events) & kCapturing) return false;
     char payload[kStatePayloadBytes];
     size_t payload_size = voice_state_payload_build(snapshot, payload, sizeof(payload));
     if (!payload_size) return false;
 
-    xEventGroupSetBits(s_events, kDropPlayback);
-    clear_packet_queue(s_tx_packets);
-    clear_packet_queue(s_rx_packets);
-    xEventGroupSetBits(s_events, kCapturing);
-    xEventGroupClearBits(s_events, kSendAllowed | kSpeaking);
+    while (s_ending_turn.load()) vTaskDelay(1);
+    if (s_active_turn.load()) return false;
     uint32_t turn = s_requested_turn.fetch_add(1) + 1;
     if (!turn) turn = s_requested_turn.fetch_add(1) + 1;
-    if (!enqueue(CommandType::Start, payload, payload_size, turn)) {
-        xEventGroupClearBits(s_events, kCapturing);
+    uint32_t inactive = 0;
+    if (!s_active_turn.compare_exchange_strong(inactive, turn)) return false;
+    if (s_ending_turn.load()) {
+        (void)voice_turn_release(s_active_turn, turn);
         return false;
     }
     publish(VOICE_ASSISTANT_SYNCING);
+    xEventGroupSetBits(s_events, kDropPlayback);
+    s_playback_epoch.fetch_add(1);
+    xEventGroupClearBits(s_events, kSendAllowed | kSpeaking);
+    clear_packet_queue(s_tx_packets, true);
+    clear_packet_queue(s_rx_packets);
+    if (!enqueue(CommandType::Start, payload, payload_size, turn)) {
+        uint32_t expected = turn;
+        if (s_active_turn.compare_exchange_strong(expected, 0)) publish(VOICE_ASSISTANT_ERROR);
+        return false;
+    }
     return true;
 }
 
-extern "C" void voice_assistant_end(void) {
-    if (!s_events || !(xEventGroupGetBits(s_events) & kCapturing)) return;
-    xEventGroupClearBits(s_events, kCapturing);
-    uint32_t turn = s_requested_turn.load();
-    if (!enqueue(CommandType::Stop, nullptr, 0, turn)) s_stop_fallback.store(turn);
+extern "C" bool voice_assistant_end_if_active(void) {
+    if (s_ending_turn.load()) return true;
+    return end_turn(s_active_turn.load());
 }
 
-extern "C" void voice_assistant_prepare_sleep(void) {
-    if (!s_events) return;
+extern "C" bool voice_assistant_prepare_sleep(void) {
+    if (!s_events) return true;
+    s_suspend_requested.store(true);
+    s_active_turn.store(0);
     reset_audio_flow();
     while (xSemaphoreTake(s_suspend_done, 0) == pdTRUE) {}
-    if (enqueue(CommandType::Suspend))
-        (void)xSemaphoreTake(s_suspend_done, pdMS_TO_TICKS(2500));
+    if (xSemaphoreTake(s_suspend_done, pdMS_TO_TICKS(15000)) != pdTRUE) {
+        s_suspend_requested.store(false);
+        publish(VOICE_ASSISTANT_ERROR);
+        return false;
+    }
+    if (xSemaphoreTake(s_capture_gate, pdMS_TO_TICKS(3000)) != pdTRUE) {
+        s_suspend_requested.store(false);
+        publish(VOICE_ASSISTANT_ERROR);
+        return false;
+    }
+    xSemaphoreGive(s_capture_gate);
+    if (xSemaphoreTake(s_audio_gate, pdMS_TO_TICKS(3000)) != pdTRUE) {
+        s_suspend_requested.store(false);
+        publish(VOICE_ASSISTANT_ERROR);
+        return false;
+    }
+    xSemaphoreGive(s_audio_gate);
+    return true;
 }
 
 extern "C" voice_assistant_status_t voice_assistant_get_status(void) {
-    return s_status;
+    return s_status.load();
 }
 
 extern "C" void voice_assistant_set_progress_callback(voice_progress_callback_t callback, void *context) {

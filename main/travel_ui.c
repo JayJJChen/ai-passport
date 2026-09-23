@@ -214,11 +214,11 @@ void travel_ui_refresh(const travel_content_t *content, const travel_model_t *mo
             case TRAVEL_VOICE_SYNCING:
                 text = "连接语音\n请稍候"; mode = "语音"; break;
             case TRAVEL_VOICE_LISTENING:
-                text = "请说话\n松开发送"; mode = "语音"; break;
+                text = "请说话\n再按发送"; mode = "语音"; break;
             case TRAVEL_VOICE_THINKING:
                 text = "正在思考\n请稍候"; mode = "语音"; break;
             case TRAVEL_VOICE_SPEAKING:
-                text = "正在回答\n按住可打断"; mode = "语音"; break;
+                text = "正在回答\n再按打断"; mode = "语音"; break;
             case TRAVEL_VOICE_ERROR:
                 text = "语音暂不可用\n稍后再试"; mode = "离线"; break;
             case TRAVEL_VOICE_OFFLINE:
