@@ -1,160 +1,303 @@
 {
-  "version": 2,
+  "version": 3,
+  "trip_id": "western-australia-2026",
+  "content_version": "wa-child-v1",
   "days": [
     {
       "id": "day01_perth",
       "date": "2026-10-02",
       "title": "珀斯",
-      "home": "夜落珀斯\n入住休息",
-      "reply": "收到，已经\n完成",
-      "schedule": ["机场到酒店\n安顿休息", "抵达珀斯\n入住休息", "Four Points\nPerth"],
-      "reminders": [
-        {"text": "手机换卡\n开通网络"},
-        {"text": "确认明日\n取房车资料"},
-        {"text": "到酒店后\n报个平安"}
+      "home": "飞到珀斯啦\n今晚好好睡",
+      "reply": "这一站玩过啦\n记下这段旅行",
+      "schedule": [
+        "机场到酒店\n安顿休息",
+        "飞抵珀斯\n今晚住酒店",
+        "Four Points\nPerth"
       ],
-      "background": "perth-night.png"
+      "background": "perth-night.png",
+      "companion_layout": "standard",
+      "activities": [
+        {
+          "id": "d01_arrive",
+          "text": "飞抵珀斯\n今晚住酒店",
+          "optional": false
+        }
+      ]
     },
     {
       "id": "day02_jurien",
       "date": "2026-10-03",
       "title": "尖峰石阵",
-      "home": "白沙丘出发\n傍晚看尖峰",
-      "reply": "收到，已经\n完成",
-      "schedule": ["Perth→沙丘\n→Jurien Bay", "白沙丘\n傍晚尖峰石阵", "Jurien Bay\n房车营地"],
-      "reminders": [
-        {"text": "取车前检查\n证件与行李"},
-        {"text": "确认房车\n随车用品"},
-        {"text": "出发晚就\n少去一处"}
+      "home": "白沙丘滑沙\n看尖峰石阵",
+      "reply": "这一站玩过啦\n记下这段旅行",
+      "schedule": [
+        "Perth出发\n到Jurien Bay",
+        "白沙丘滑沙\n寻找奇形怪石",
+        "Jurien Bay\n房车营地"
       ],
-      "background": "dunes-pinnacles.png"
+      "background": "dunes-pinnacles.png",
+      "companion_layout": "standard",
+      "activities": [
+        {
+          "id": "d02_dunes",
+          "text": "白沙丘滑沙\n像坐小滑梯",
+          "optional": true
+        },
+        {
+          "id": "d02_pinnacles",
+          "text": "走进尖峰石阵\n找奇形怪石",
+          "optional": true
+        }
+      ]
     },
     {
       "id": "day03_kalbarri",
       "date": "2026-10-04",
       "title": "粉湖",
-      "home": "一路向北\n初见粉湖",
-      "reply": "收到，已经\n完成",
-      "schedule": ["经 Geraldton\n到 Kalbarri", "补给休息\n第一次看粉湖", "Kalbarri\nTudor营地"],
-      "reminders": [
-        {"text": "长途驾驶前\n补水休息"},
-        {"text": "Geraldton\n完成补给"},
-        {"text": "抵达营地\n办理入住"}
+      "home": "一路向北走\n去看粉红湖",
+      "reply": "这一站玩过啦\n记下这段旅行",
+      "schedule": [
+        "Geraldton\n到Kalbarri",
+        "第一次看粉湖\n找找粉红色",
+        "Kalbarri\nTudor营地"
       ],
-      "background": "pink-lake-gorge.png"
+      "background": "pink-lake.png",
+      "companion_layout": "standard",
+      "activities": [
+        {
+          "id": "d03_pink_lake",
+          "text": "第一次看粉湖\n找找粉红色",
+          "optional": false
+        },
+        {
+          "id": "d03_camp",
+          "text": "到卡尔巴里\n住房车营地",
+          "optional": false
+        }
+      ]
     },
     {
       "id": "day04_kalbarri",
       "date": "2026-10-05",
-      "title": "卡尔巴里",
+      "title": "大峡谷",
       "home": "峡谷天空步道\n海岸看悬崖",
-      "reply": "收到，已经\n完成",
-      "schedule": ["Kalbarri\n国家公园", "自然之窗\n与 Skywalk", "Kalbarri\nTudor营地"],
-      "reminders": [
-        {"text": "带足饮水\n做好防晒"},
-        {"text": "只走适合\n老幼的路线"},
-        {"text": "累了就提前\n返回营地"}
+      "reply": "这一站玩过啦\n记下这段旅行",
+      "schedule": [
+        "Kalbarri\n国家公园",
+        "自然之窗\n与Skywalk",
+        "Kalbarri\nTudor营地"
       ],
-      "background": "pink-lake-gorge.png"
+      "background": "kalbarri-gorge.png",
+      "companion_layout": "standard",
+      "activities": [
+        {
+          "id": "d04_window",
+          "text": "走到自然之窗\n看看大峡谷",
+          "optional": false
+        },
+        {
+          "id": "d04_skywalk",
+          "text": "走上天空步道\n俯瞰弯弯河流",
+          "optional": false
+        },
+        {
+          "id": "d04_cliffs",
+          "text": "沿海岸看悬崖\n听听海浪声",
+          "optional": false
+        }
+      ]
     },
     {
       "id": "day05_dongara",
       "date": "2026-10-06",
-      "title": "东加拉",
-      "home": "再访粉湖\n海边等日落",
-      "reply": "收到，已经\n完成",
-      "schedule": ["Kalbarri出发\nHutt Lagoon", "第二次粉湖\n海边看日落", "Dongara\n房车营地"],
-      "reminders": [
-        {"text": "离营前检查\n随身物品"},
-        {"text": "长途途中\n停车休息"},
-        {"text": "抵达后确认\n今晚营位"}
+      "title": "海边日落",
+      "home": "上午再看粉湖\n傍晚海边日落",
+      "reply": "这一站玩过啦\n记下这段旅行",
+      "schedule": [
+        "Kalbarri\n到Dongara",
+        "再看一次粉湖\n海边等太阳落",
+        "Dongara\n房车营地"
       ],
-      "background": "pink-lake-gorge.png"
+      "background": "dongara-sunset.png",
+      "companion_layout": "standard",
+      "activities": [
+        {
+          "id": "d05_pink_lake",
+          "text": "再看一次粉湖\n颜色一样吗",
+          "optional": false
+        },
+        {
+          "id": "d05_sunset",
+          "text": "东加拉看日落\n太阳落进海里",
+          "optional": false
+        }
+      ]
     },
     {
       "id": "day06_jurien",
       "date": "2026-10-07",
-      "title": "朱里恩湾",
-      "home": "回到海边\n营地吃晚饭",
-      "reply": "收到，已经\n完成",
-      "schedule": ["Dongara\n→ Jurien Bay", "海边休息\n营地晚饭", "Jurien Bay\n房车营地"],
-      "reminders": [
-        {"text": "今晚是房车\n最后一晚"},
-        {"text": "整理个人\n随身物品"},
-        {"text": "准备明日\n还车事项"}
+      "title": "海边营地",
+      "home": "回到朱里恩湾\n海边营地烧烤",
+      "reply": "这一站玩过啦\n记下这段旅行",
+      "schedule": [
+        "Dongara\n到Jurien Bay",
+        "海边轻松玩\n营地吃烧烤",
+        "Jurien Bay\n房车营地"
       ],
-      "background": "dunes-pinnacles.png"
+      "background": "jurien-camp.png",
+      "companion_layout": "standard",
+      "activities": [
+        {
+          "id": "d06_beach",
+          "text": "朱里恩湾海边\n轻轻松松玩",
+          "optional": false
+        },
+        {
+          "id": "d06_bbq",
+          "text": "回到房车营地\n一起吃烧烤",
+          "optional": false
+        }
+      ]
     },
     {
       "id": "day07_fremantle",
       "date": "2026-10-08",
-      "title": "弗里曼港",
-      "home": "告别房车\n逛港口老街",
-      "reply": "收到，已经\n完成",
-      "schedule": ["Jurien Bay\n→ Fremantle", "还房车\n逛港口老街", "Fremantle\nPrison YHA"],
-      "reminders": [
-        {"text": "爸爸记得\n还房车"},
-        {"text": "按租车要求\n检查车辆"},
-        {"text": "确认车内\n没有遗漏"},
-        {"text": "到酒店\n办理入住"}
+      "title": "换车出发",
+      "home": "告别大房车\n换小汽车出发",
+      "reply": "这一站玩过啦\n记下这段旅行",
+      "schedule": [
+        "还房车后取车\n到Fremantle",
+        "换车去弗里曼\n今晚住老建筑",
+        "Fremantle\nPrison YHA"
       ],
-      "background": "fremantle-rottnest.png"
+      "background": "fremantle-port.png",
+      "companion_layout": "standard",
+      "activities": [
+        {
+          "id": "d07_change_car",
+          "text": "告别大房车\n换一辆小汽车",
+          "optional": false
+        },
+        {
+          "id": "d07_fremantle",
+          "text": "来到弗里曼港\n今晚住老建筑",
+          "optional": false
+        }
+      ]
     },
     {
       "id": "day08_rottnest",
       "date": "2026-10-09",
       "title": "罗特尼斯",
-      "home": "坐船上岛\n找短尾矮袋鼠",
-      "reply": "收到，已经\n完成",
-      "schedule": ["Fremantle\n→ Rottnest", "坐船看海湾\n寻找 quokka", "Discovery\nRottnest"],
-      "reminders": [
-        {"text": "确认船票与\n登船安排"},
-        {"text": "带好岛上\n过夜行李"},
-        {"text": "不追不摸\n不喂野生动物"}
+      "home": "坐船去小岛\n找短尾矮袋鼠",
+      "reply": "这一站玩过啦\n记下这段旅行",
+      "schedule": [
+        "Northport\n坐船到小岛",
+        "海滩找袋鼠\n晚上住帐篷",
+        "Discovery\nRottnest"
       ],
-      "background": "fremantle-rottnest.png"
+      "background": "rottnest-quokka.png",
+      "companion_layout": "compact",
+      "activities": [
+        {
+          "id": "d08_ferry",
+          "text": "坐船去小岛\n看看蓝蓝的海",
+          "optional": false
+        },
+        {
+          "id": "d08_beach",
+          "text": "岛上海滩玩\n灯塔就在旁边",
+          "optional": false
+        },
+        {
+          "id": "d08_quokka",
+          "text": "找短尾矮袋鼠\n看看小圆耳朵",
+          "optional": false
+        }
+      ]
     },
     {
       "id": "day09_scarborough",
       "date": "2026-10-10",
-      "title": "斯卡伯勒",
-      "home": "环岛看灯塔\n下午返回海边",
-      "reply": "收到，已经\n完成",
-      "schedule": ["Rottnest\nScarborough", "海湾与灯塔\n下午离岛", "Seashells\nScarborough"],
-      "reminders": [
-        {"text": "确认退房与\n返程船安排"},
-        {"text": "离岛前取齐\n全部行李"},
-        {"text": "到公寓\n办理入住"}
+      "title": "罗岛环游",
+      "home": "巴士环岛看海\n下午坐船回来",
+      "reply": "这一站玩过啦\n记下这段旅行",
+      "schedule": [
+        "巴士环岛游\n坐船回珀斯",
+        "海湾和灯塔\n选喜欢的地方",
+        "Seashells\nScarborough"
       ],
-      "background": "fremantle-rottnest.png"
+      "background": "rottnest-bus.png",
+      "companion_layout": "standard",
+      "activities": [
+        {
+          "id": "d09_bus",
+          "text": "坐巴士环岛\n看看海湾灯塔",
+          "optional": false
+        },
+        {
+          "id": "d09_ferry_back",
+          "text": "下午坐船回来\n住海边的公寓",
+          "optional": false
+        }
+      ]
     },
     {
       "id": "day10_caversham",
       "date": "2026-10-11",
-      "title": "考拉日",
-      "home": "看考拉袋鼠\n再去国王公园",
-      "reply": "收到，已经\n完成",
-      "schedule": ["Caversham\n→ Kings Park", "考拉袋鼠\n城市与河流", "Seashells\nScarborough"],
-      "reminders": [
-        {"text": "出门带水\n做好防晒"},
-        {"text": "确认动物园\n游览安排"},
-        {"text": "傍晚返回\nScarborough"}
+      "title": "动物朋友",
+      "home": "看考拉和袋鼠\n再去国王公园",
+      "reply": "这一站玩过啦\n记下这段旅行",
+      "schedule": [
+        "Caversham\n到Kings Park",
+        "看看动物朋友\n公园里轻松玩",
+        "Seashells\nScarborough"
       ],
-      "background": "wildlife-city-sunset.png"
+      "background": "caversham-wildlife.png",
+      "companion_layout": "standard",
+      "activities": [
+        {
+          "id": "d10_wildlife",
+          "text": "去看考拉袋鼠\n认识动物朋友",
+          "optional": false
+        },
+        {
+          "id": "d10_kings_park",
+          "text": "去国王公园\n看花草和城市",
+          "optional": false
+        }
+      ]
     },
     {
       "id": "day11_airport",
       "date": "2026-10-12",
-      "title": "返程日",
-      "home": "再看考拉海边\n然后准备回家",
-      "reply": "收到，已经\n完成",
-      "schedule": ["Yanchep\nPerth Airport", "考拉与海边\n准备返程", "今晚乘机\n返回温暖的家"],
-      "reminders": [
-        {"text": "公寓退房\n带齐行李"},
-        {"text": "确认航班和\n到机场时间"},
-        {"text": "检查证件\n手机随身物品"}
+      "title": "准备回家",
+      "home": "考拉海滩再见\n晚上坐飞机啦",
+      "reply": "这一站玩过啦\n记下这段旅行",
+      "schedule": [
+        "Yanchep\n再去珀斯机场",
+        "看考拉玩海滩\n晚上乘机回家",
+        "今晚乘飞机\n明天到上海"
       ],
-      "background": "wildlife-city-sunset.png"
+      "background": "perth-return.png",
+      "companion_layout": "standard",
+      "activities": [
+        {
+          "id": "d11_yanchep",
+          "text": "再去看看考拉\n也可以多睡会",
+          "optional": true
+        },
+        {
+          "id": "d11_beach",
+          "text": "再去海滩玩\n和大海说再见",
+          "optional": false
+        },
+        {
+          "id": "d11_flight",
+          "text": "晚上坐飞机\n明天回到上海",
+          "optional": false
+        }
+      ]
     }
   ]
 }

@@ -1,0 +1,197 @@
+{
+  "created": "2026-09-22",
+  "tool": "built-in image_gen.imagegen",
+  "intent": "Illustrated child travel backgrounds; artistic impressions, not geographic maps or documentary photographs.",
+  "display": {
+    "width": 240,
+    "height": 320,
+    "format": "RGB565 little-endian",
+    "bytes_per_background": 153600
+  },
+  "selected": [
+    {
+      "name": "pink-lake.png",
+      "generated_file": "exec-99b5ccb8-e6f8-4be6-925f-d28b12ab2215.png",
+      "source_size": [
+        1086,
+        1448
+      ],
+      "source_bytes": 1800184,
+      "sha256": "a4409034cea35fc9740e1080af2e7a9ec284baa6b67df200975a36b03184bf95"
+    },
+    {
+      "name": "kalbarri-gorge.png",
+      "generated_file": "exec-64710e2e-379c-4707-b651-9cec7e010cc5.png",
+      "source_size": [
+        1086,
+        1448
+      ],
+      "source_bytes": 2311192,
+      "sha256": "12d143e0587291d5e8bb5de6c916811b0c9c8e98d8f1d148fbfeb635476806bc"
+    },
+    {
+      "name": "dongara-sunset.png",
+      "generated_file": "exec-53cab9ac-555f-4924-993c-1fa0eb82a7a8.png",
+      "source_size": [
+        1086,
+        1448
+      ],
+      "source_bytes": 2124042,
+      "sha256": "f816ccacf0a64f8120814cdabb9b76b57be4640cb81eb67a862e0c85941cbadb"
+    },
+    {
+      "name": "jurien-camp.png",
+      "generated_file": "exec-5d08033b-ef28-4077-a22b-b0e8e54825a4.png",
+      "source_size": [
+        1086,
+        1448
+      ],
+      "source_bytes": 2295392,
+      "sha256": "ba9f75f08d197df198c28291bbda9eae4624784900443b974007d13f90193e8b"
+    },
+    {
+      "name": "fremantle-port.png",
+      "generated_file": "exec-cda68012-860a-4fd2-85f0-2c0f45c50b71.png",
+      "source_size": [
+        1086,
+        1448
+      ],
+      "source_bytes": 2055267,
+      "sha256": "ed3f0e5bd55e409c06c67dc159a65c979371a2aebccc10dfb57d12088c21de5e"
+    },
+    {
+      "name": "rottnest-quokka.png",
+      "generated_file": "exec-66aacf2d-b965-4441-bc0c-b169a71f4aa8.png",
+      "source_size": [
+        1086,
+        1448
+      ],
+      "source_bytes": 1890463,
+      "sha256": "833cb80806b5c0017f5773aeae3fc20a5f736f28df6f18d13e4784005a816135"
+    },
+    {
+      "name": "rottnest-bus.png",
+      "generated_file": "exec-fb1cdba0-9840-444d-a1cb-2d95026ddb37.png",
+      "source_size": [
+        1086,
+        1448
+      ],
+      "source_bytes": 2099056,
+      "sha256": "226263a2f36fe9d12da806d2c3c7c0113b57a1351691e3c35cf761c8617f1d29"
+    },
+    {
+      "name": "caversham-wildlife.png",
+      "generated_file": "exec-666882c9-8906-4170-91ad-942afecf3157.png",
+      "source_size": [
+        1086,
+        1448
+      ],
+      "source_bytes": 2811368,
+      "sha256": "c05796dd474bd60c5569d1fcf25ce60b654b1574d209ae6ae50a48d38232d877"
+    },
+    {
+      "name": "perth-return.png",
+      "generated_file": "exec-b86dc0de-8c3d-477e-899b-8820f14e3835.png",
+      "source_size": [
+        1086,
+        1448
+      ],
+      "source_bytes": 2184923,
+      "sha256": "2056f1f6a7ecebc96c41ea4f5809602b80bbcf1d8a523a944d030f064a3974de"
+    },
+    {
+      "name": "perth-night.png",
+      "generated_file": "exec-f4cd624e-2978-4080-8f52-4db1da72e78e.png",
+      "source_size": [
+        1086,
+        1448
+      ],
+      "source_bytes": 1880499,
+      "sha256": "6b0f001e16be3d3b290b46cee7d301a3dab9cd9a38073cbcf053c338607267a6"
+    }
+  ],
+  "prompt_history": [
+    {
+      "name": "pink-lake.png",
+      "prompt": "Use case: illustration-story. Asset type: full-screen illustrated background for a child's Western Australia travel companion, not a UI mockup. Create ONE polished portrait 3:4 image, ideally 1080x1440. Bright warm painted storybook style with clear shapes and softly brushed texture, cyan skies and natural saturated colors matching the attached reference STYLE ONLY. No typography, lettering, logos, watermark, borders, UI, icons, or anthropomorphic mascot. The art will shrink to 240x320. Keep the bottom 28 percent simple ground and the center-left quiet because an existing separate animated koala and a dialogue panel are overlaid there. Place readable destination landmarks in upper half. Do not copy the reference's impossible combined places. Scene: Hutt Lagoon Western Australia, a genuinely pink salt lagoon with rose-pink water and pale salt shoreline curving from left to right, low flat coastal vegetation on the horizon, warm afternoon sunlight. A simple natural lagoon landscape, no rock arch, no canyon, no buildings. The pink water should dominate upper-middle half, with warm pale sandy foreground lower half."
+    },
+    {
+      "name": "kalbarri-gorge.png",
+      "prompt": "Use case: illustration-story. Asset type: full-screen illustrated background for a child's Western Australia travel companion, not a UI mockup. Create ONE polished portrait 3:4 image, ideally 1080x1440. Bright warm painted storybook style with clear shapes and softly brushed texture, cyan skies and natural saturated colors matching the attached reference STYLE ONLY. No typography, lettering, logos, watermark, borders, UI, icons, or anthropomorphic mascot. The art will shrink to 240x320. Keep the bottom 28 percent simple ground and the center-left quiet because an existing separate animated koala and a dialogue panel are overlaid there. Place readable destination landmarks in upper half. Do not copy the reference's impossible combined places. Scene: Kalbarri National Park's Nature's Window, a recognizable red sandstone natural window high in the right half opening onto the Murchison River gorge and layered ochre canyon. A pale winding blue-green river below, distant cliffs, airy bright spring sunlight. No pink lake, no buildings, no people. Keep the large red rock window and distant gorge chiefly above 45 percent height; broad sunlit ochre trail foreground below."
+    },
+    {
+      "name": "dongara-sunset.png",
+      "prompt": "Use case: illustration-story. Create ONE polished portrait 3:4 illustration for a child's Western Australia travel companion, ideally 1080x1440. Use attached reference only to match its bright warm painted storybook brushwork, airy cyan sky, natural saturated colors, and simplified legible shapes. This is background art, not a UI or screen. No text, lettering, logos, watermark, border, icons, people or anthropomorphic mascot. The final image is displayed at240x320. Top half contains the distinct destination landscape cues. Center-left will be covered by a koala mascot; bottom28percent will be covered by a speech panel, so keep them quiet and do not put important small subjects there. Destination: Dongara and Port Denison beach, Western Australia. A glowing golden-orange sun approaching the Indian Ocean horizon, a modest long timber fishing jetty extending from the upper right into the calm turquoise sea, coastal grasses and sand. Quiet late-afternoon peach sky with small clouds, shimmering sunset reflection. Wide serene beach foreground. No city skyline, no tall towers, no lighthouse. Make ocean sunset and jetty clearly readable in the upper-middle third."
+    },
+    {
+      "name": "jurien-camp.png",
+      "prompt": "Use case: illustration-story. Create ONE polished portrait 3:4 illustration for a child's Western Australia travel companion, ideally 1080x1440. Use attached reference only to match its bright warm painted storybook brushwork, airy cyan sky, natural saturated colors, and simplified legible shapes. This is background art, not a UI or screen. No text, lettering, logos, watermark, border, icons, people or anthropomorphic mascot. The final image is displayed at240x320. Top half contains the distinct destination landscape cues. Center-left will be covered by a koala mascot; bottom28percent will be covered by a speech panel, so keep them quiet and do not put important small subjects there. Destination: Jurien Bay seaside caravan campsite in Western Australia. Turquoise calm bay and broad sandy beach behind a bright modest white campervan parked on a grassy sandy campsite in the upper-right quadrant, an unlit safe campsite barbecue and simple picnic table nearby. Early evening warm sun, friendly leisurely holiday feeling, low coastal shrubs. Main campervan entirely above mid-height so it stays visible behind the foreground mascot. No text or brands on vehicle, no fire, no people. Broad simple warm sand and grass foreground. Distinct from a sunset or city scene."
+    },
+    {
+      "name": "fremantle-port.png",
+      "prompt": "Use case: illustration-story. ONE portrait3:4 painted storybook background, ideally1080x1440, for a seven-year-old child's Western Australia travel companion. Match only the bright softly brushed style, natural colors and readable shapes of the provided style reference. NOT a UI mockup. No lettering, text, logos, watermark, borders, device, humans, or anthropomorphic mascot. Scene: Fremantle historic harbor in warm afternoon light, pale limestone and terracotta heritage buildings lining a waterfront street in upperhalf, small white ferry and masts beside a bright blue harbor, a discreet modest unbranded compact white car in distant street. City-and-port scene only; no island lighthouse. At240x320 the top-half architecture should distinguish Fremantle. Leave broad sunny beige walkway and gentle shadows in center-left and bottom30percent for an overlaid koala character and dialogue panel. Important buildings and ferry above44percent height."
+    },
+    {
+      "name": "rottnest-quokka.png",
+      "prompt": "Use case: illustration-story. ONE portrait3:4 painted storybook background, ideally1080x1440, for a seven-year-old child's Western Australia travel companion. Match only the bright softly brushed style, natural colors and readable shapes of the provided style reference. NOT a UI mockup. No lettering, text, logos, watermark, borders, device, humans, or anthropomorphic mascot. Scene: Rottnest Island Pinky Beach with a REAL QUOKKA prominently visible in right-middle foreground; turquoise Indian Ocean and white Bathurst lighthouse on a low dune in the upper-right background. Warm golden afternoon light. Quokka is a small stocky brown-furred marsupial with rounded SHORT ears, pointed dark nose, alert dark eyes, rounded body and small forepaws, short thin tail visible beside it; natural anatomical posture on hind feet, slight friendly look, not a koala, not a teddy bear, not a kangaroo with long ears. Give its full body an unobstructed contrasting pale sandy patch. CRITICAL composition for overlay: canvas coordinates normalized from final240x320: quokka including ears/feet/tail must fit inside x112..180,y130..222 (47%-75% of width,41%-69% of height), about60x80px worth of clearly recognizable subject. Keep all quokka to the right of46percent and left of75percent; not at bottom. LEFT half below40percent has empty sand for a separate96px koala mascot added by software. Bottom28percent is empty sand; rightmost24percent free of crucial subjects because buttons cover it. The lighthouse can be high near70percent horizontal,20percentvertical. No other animals and no mascot costume. Keep the quokka large enough to identify at240px width; the image itself contains NO overlay guides or UI."
+    },
+    {
+      "name": "rottnest-quokka.png",
+      "prompt": "Use case: precise-object-edit. Edit this illustration ONLY to make the quokka modestly smaller and reposition it for a screen overlay. Preserve the entire beautiful background, colors, lighthouse, beach and style unchanged. Preserve the same recognizable friendly natural quokka anatomy. Scale the quokka to about80 percent of its current size, move it slightly LEFT and lower a little, and curve its thin tail close alongside its feet rather than extending far to the right. In the portrait canvas, ALL quokka pixels including ears/feet/tail should fit in x47%-75% width and y41%-69% height, and the full body needs to remain on open pale sand. Do not add a second animal. Keep the left45% of the canvas clear of the animal. No text, guides, frame, arrows, labels or UI. The output is still the full3:4 illustration, not a crop. This will leave room for a separate small mascot on the left and UI buttons at rightmost24percent."
+    },
+    {
+      "name": "rottnest-bus.png",
+      "prompt": "Use case: illustration-story. Create ONE portrait3:4 bright painted storybook illustration, ideally1080x1440, matching the provided style reference brushwork and colors ONLY. Full background art for child's Western Australia travel companion, not a UI. Scene: Rottnest Island bus day trip along a coastal road. A modest white and turquoise island shuttle bus with no text or brands on a low winding road in upper-middle part of picture, around x45-73% width,y25-40% height. Beyond the bus are two beautiful clear turquoise coves, white sandy beaches, low coastal shrubs and a small white lighthouse well in the distance high in frame. Warm clear daytime sky. No cars, no cyclists, no people, no quokka, no anthropomorphic koala. The bus and lighthouse must be recognizable after shrinking to240x320. Keep lowerhalf simple pale sand and coastal plants so a large software mascot can overlay centerleft. Rightmost24percent and bottom28percent must contain no crucial subject. No text, logos, watermark, frame, UI, icons, typography or labels."
+    },
+    {
+      "name": "caversham-wildlife.png",
+      "prompt": "Use case: illustration-story. Create ONE portrait3:4 bright painted storybook background for a7-year-old child's Western Australia travel companion, ideally1080x1440. Match the provided reference's soft brushwork, sunlit natural saturated colors and simple readable landscape shapes only. This is full background artwork, NOT a UI mockup. No text, letters, logos, watermarks, frame, borders, device, labels, or anthropomorphic characters. At final240x320px a large separate koala mascot overlays x20..164,y84..228 and buttons cover x184..238, plus dialogue covers y230..312; put key destination cues in upperhalf or upperright before the far right edge, leave centerleft and lower foreground visually calm. Scene: a friendly natural Australian wildlife park in bright morning light, with eucalyptus trees and open grassy habitat. A REAL GRAY KOALA nestled naturally in a fork of a eucalyptus tree clearly in the uppermiddle-right around x60-72%width,y18-29%height, with rounded fluffy ears and black oval nose. A REAL TAN KANGAROO in the nearby distant grassy clearing toward upperright middle, smaller in depth and clearly long-eared with long hind feet and tail; no clothes, no cap. Low rustic park fence and sunlit bushland backdrop, no visitor signs or buildings. Airy sky between gum leaves, dappled pale sandy path in lowerhalf. Koala in the tree should be clearly identifiable on tiny display and distinct from the separate cap-wearing software mascot. Focus on animals and eucalyptus; not city, not beach."
+    },
+    {
+      "name": "perth-return.png",
+      "prompt": "Use case: illustration-story. Create ONE portrait3:4 bright painted storybook background for a7-year-old child's Western Australia travel companion, ideally1080x1440. Match the provided reference's soft brushwork, sunlit natural saturated colors and simple readable landscape shapes only. This is full background artwork, NOT a UI mockup. No text, letters, logos, watermarks, frame, borders, device, labels, or anthropomorphic characters. At final240x320px a large separate koala mascot overlays x20..164,y84..228 and buttons cover x184..238, plus dialogue covers y230..312; put key destination cues in upperhalf or upperright before the far right edge, leave centerleft and lower foreground visually calm. Scene: saying goodbye to Perth after the trip. Sunny Scarborough-style broad Indian Ocean beach and pale sand, turquoise surf and a few low distant beachfront buildings, with eucalyptus branches framing the upperleft and a small natural gray koala tucked high in a gum-tree fork toward uppermiddle-right (around x62%,y23%) to recall Yanchep. A tiny clean white passenger airplane traveling away in open uppermiddle sky (no airline markings), a subtle warm farewell mood. Main landscape cues are sea, beach, eucalyptus and small departing aircraft, no airport signage, no luggage, no city skyscrapers. Pale sandy foreground lowerhalf remains open. Do not make an infographic or collage; everything painted as one coherent imaginative coastal view."
+    },
+    {
+      "name": "perth-night.png",
+      "prompt": "Use case: precise-object-edit. Make ONE minimal edit to this portrait storybook illustration of Perth at twilight. ADD ONE small, elegant white passenger airplane in the open blue sky, roughly x60%-72%width and y19%-23%height, flying toward the city. Aircraft must be recognizable at240px finalimagewidth, but subtle and much smaller than the skyline; no brand, logo, text or trails that dominate. Preserve all existing skyline, stars, colors, brushwork, river, foreground, tree, exact3:4 framing and layout. No changes besides the small plane. Do not add people or characters."
+    },
+    {
+      "name": "pink-lake.png",
+      "prompt": "Use case: precise-object-edit. Make ONE minimal edit to this bright painted storybook Hutt Lagoon pink-lake background. ADD ONE small unbranded white campervan on the distant far sandy shoreline on the right, centered around x69%width,y26%height, entirely inside x62%-75%width and y23%-29%height. Keep it on land, not water, and recognizable as a motorhome at tiny240px width. Campervan scale should respect the distant low horizon and its top must not dominate the sky. Preserve the brilliant pink lake, existing gentle shoreline curve, foreground, clouds, palette, brushwork, dimensions and ALL other scene elements unchanged. No text, logos, watermark, people or additional vehicles. Keep center-left and lowerhalf unaltered and empty for a foreground software mascot."
+    },
+    {
+      "name": "perth-night.png",
+      "prompt": "Use case: precise-object-edit. Preserve this image completely, including the aircraft size, direction and horizontal position. ONLY MOVE the one small white airplane vertically DOWN by about100pixels on this1086x1448 image (7percent of image height). It currently sits near16percent imageheight; move it to23percent imageheight so its center is aroundfinalscreenpixel y74 on a240x320 display. Same horizontalposition near x162 on that display. This minor move is essential because a statuslabel overlays its currentposition. Erase its old position cleanly back to the blue sky and do not duplicate it. Every other part of sky, city, river, trees, colors, lighting and portraitframing stays unchanged. No text or guides."
+    },
+    {
+      "name": "rottnest-quokka.png",
+      "prompt": "Use case: precise-object-edit. Make one minimal addition to this portrait bright storybook Rottnest Island Pinky Beach illustration. Add ONE small beige canvas glamping tent, like an island overnight Discovery tent, set back naturally among the middle-distance sandy dunes at the right, behind and WELL ABOVE the quokka. The tent should sit around x77%-89%width,y31%-37%height, above the rocky slope and to the right of the turquoise bay, on sand/land, not in the ocean. Its roof and entrance must be recognizable, but it should remain a distant modest part of the scenery (around28pxwide by16pxhigh at240x320), with no logo or text. Do NOT move, resize, redraw, cover, touch, or otherwise change ANY PART of the quokka: exact ears, face, pose, fur, feet, curvedtail, position and full silhouette must stay as the reference. Preserve every other part including lighthouse, sky, ocean, sand, leftemptyspace, bottomemptyspace, colors, paintedstyle, dimensions and framing. No people, newanimals, signage, writing or UI. Only add the tent in the distant right dune, far from the animal and not behind its head."
+    },
+    {
+      "name": "rottnest-quokka.png",
+      "prompt": "Use case: precise-object-edit. ONLY RELOCATE the small beige tent in this image. Currently it is at the upper-right beside the lighthouse; ERASE it there restoring the original distant dunes. Move the SAME SMALL TENT clearly DOWN AND A LITTLE LEFT, onto a small sandy ledge immediately ABOVE the large prominent MIDGROUND rocky slope along the right side of the image. Final tent center must be at85percent canvaswidth and34percent canvasheight, about x923,y492 on this1086x1448 image, and its approximate size is110pixelswide by70pixelshigh. This is well BELOW the distant lighthouse peninsula, ABOVE the large right slope, and WELL ABOVE the quokka's ears. It should be fully visible against vegetation, not hidden by rock, with a small bit of sand beneath it. CRUCIAL: the upper-right spot where the tent currently is will be covered by a UI button; do NOT leave any tent there. Do NOT move, resize, redraw or cover the quokka whatsoever, and preserve exact quokka silhouette and position. Preserve lighthouse, ocean, sky, remaining background, originalstyle, palette and dimensions. One tent total, no writing, logos, UI markers, arrows or guides."
+    }
+  ],
+  "superseded_selections": [
+    {
+      "name": "pink-lake.png",
+      "generated_file": "exec-abac90cb-a7d7-4835-892a-ab116bc74d55.png",
+      "source_size": [
+        1086,
+        1448
+      ],
+      "source_bytes": 1891549,
+      "sha256": "34bdd1dd89dd9fd581ab74fd160da7cfa80b483fedb61ea571f295009165d939"
+    },
+    {
+      "name": "rottnest-quokka.png",
+      "generated_file": "exec-fbafa1b9-0b87-4679-a72b-be96ea435868.png",
+      "source_size": [
+        1086,
+        1448
+      ],
+      "source_bytes": 1840267,
+      "sha256": "fa5f39d096769cad7d3ccddebaaf112f1a1beb4fd3cd3b18e45bb5f01b5e1685"
+    }
+  ]
+}
