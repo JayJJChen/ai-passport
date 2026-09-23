@@ -474,6 +474,11 @@ void app_main(void) {
     int minute = 0;
     bool clock_valid = current_perth_time(time(NULL), &local, &minute);
     travel_ui_refresh(&s_content, &s_model, &s_progress, -1, minute, clock_valid);
+    lv_mem_monitor_t ui_heap = {0};
+    lv_mem_monitor(&ui_heap);
+    ESP_LOGI(TAG, "LVGL pool: used=%u free=%u largest=%u",
+        (unsigned)(ui_heap.total_size - ui_heap.free_size),
+        (unsigned)ui_heap.free_size, (unsigned)ui_heap.free_biggest_size);
     bsp_lvgl_unlock();
     bsp_display_backlight(75);
 

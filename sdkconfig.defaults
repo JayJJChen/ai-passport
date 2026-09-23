@@ -29,8 +29,9 @@ CONFIG_LV_FONT_MONTSERRAT_20=y
 CONFIG_LV_BUILD_EXAMPLES=n
 CONFIG_LV_BUILD_DEMOS=n
 # LVGL 内置 malloc 池大小(KB)。它是独立静态区、不与系统堆共享,配大了会白白占用 RAM。
-# 48KB budgets loaded subset fonts plus the permanent UI; validate actual heap on device.
-CONFIG_LV_MEM_SIZE_KILOBYTES=48
+# The permanent travel UI uses the card pack from mapped flash. Keep a bounded
+# built-in pool so audio and Wi-Fi can share the remaining internal RAM.
+CONFIG_LV_MEM_SIZE_KILOBYTES=24
 
 # --- 系统 ---
 CONFIG_FREERTOS_HZ=1000
@@ -39,9 +40,9 @@ CONFIG_FREERTOS_HZ=1000
 # Captive-portal Wi-Fi provisioning replaces BLE/BLUFI and leaves more RAM for
 # TLS, WebSocket, Opus and the fixed travel UI on the no-PSRAM ESP32-C3.
 CONFIG_BT_ENABLED=n
-CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
-CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=12
-CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=12
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=3
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=6
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=6
 CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
 CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y

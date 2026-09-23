@@ -12,6 +12,7 @@
 #include "esp_audio_types.h"
 #include "esp_crt_bundle.h"
 #include "esp_event.h"
+#include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_opus_dec.h"
@@ -45,7 +46,7 @@ constexpr EventBits_t kProgressRefresh = BIT7;
 
 struct OpusPacket {
     uint16_t size;
-    uint8_t data[kMaxOpusBytes];
+    uint8_t data[1];
 };
 
 enum class CommandType : uint8_t {
@@ -94,12 +95,38 @@ void publish(voice_assistant_status_t status) {
     if (s_status_callback) s_status_callback(status, s_status_context);
 }
 
+OpusPacket *copy_packet(const uint8_t *data, size_t size) {
+    if (!data || !size || size > kMaxOpusBytes) return nullptr;
+    auto *packet = static_cast<OpusPacket *>(std::malloc(sizeof(OpusPacket) + size));
+    if (!packet) return nullptr;
+    packet->size = static_cast<uint16_t>(size);
+    std::memcpy(packet->data, data, size);
+    return packet;
+}
+
+void clear_packet_queue(QueueHandle_t queue) {
+    if (!queue) return;
+    OpusPacket *packet = nullptr;
+    while (xQueueReceive(queue, &packet, 0) == pdTRUE) std::free(packet);
+}
+
+void queue_latest_packet(QueueHandle_t queue, OpusPacket *packet) {
+    if (!packet) return;
+    if (queue && xQueueSend(queue, &packet, 0) == pdTRUE) return;
+    OpusPacket *discarded = nullptr;
+    if (queue && xQueueReceive(queue, &discarded, 0) == pdTRUE) {
+        std::free(discarded);
+    }
+    if (queue && xQueueSend(queue, &packet, 0) == pdTRUE) return;
+    std::free(packet);
+}
+
 void reset_audio_flow() {
     if (!s_events) return;
     xEventGroupClearBits(s_events, kCapturing | kSendAllowed | kChannelReady | kSpeaking);
     xEventGroupSetBits(s_events, kDropPlayback);
-    if (s_tx_packets) xQueueReset(s_tx_packets);
-    if (s_rx_packets) xQueueReset(s_rx_packets);
+    clear_packet_queue(s_tx_packets);
+    clear_packet_queue(s_rx_packets);
 }
 
 void protocol_event(esp_xiaozhi_chat_event_t event, void *event_data, void *) {
@@ -138,14 +165,7 @@ void protocol_event(esp_xiaozhi_chat_event_t event, void *event_data, void *) {
 void incoming_audio(const uint8_t *data, int length, void *) {
     if (!data || length <= 0 || (size_t)length > kMaxOpusBytes ||
         (xEventGroupGetBits(s_events) & kDropPlayback)) return;
-    OpusPacket packet = {};
-    packet.size = (uint16_t)length;
-    std::memcpy(packet.data, data, (size_t)length);
-    if (xQueueSend(s_rx_packets, &packet, 0) != pdTRUE) {
-        OpusPacket discarded;
-        (void)xQueueReceive(s_rx_packets, &discarded, 0);
-        (void)xQueueSend(s_rx_packets, &packet, 0);
-    }
+    queue_latest_packet(s_rx_packets, copy_packet(data, (size_t)length));
 }
 
 void system_event(void *, esp_event_base_t, int32_t event_id, void *) {
@@ -177,7 +197,7 @@ esp_err_t initialize_codecs() {
         .bits_per_sample = ESP_AUDIO_BIT16,
         .bitrate = ESP_OPUS_BITRATE_AUTO,
         .frame_duration = ESP_OPUS_ENC_FRAME_DURATION_60_MS,
-        .application_mode = ESP_OPUS_ENC_APPLICATION_AUDIO,
+        .application_mode = ESP_OPUS_ENC_APPLICATION_VOIP,
         .complexity = 0,
         .enable_fec = false,
         .enable_dtx = true,
@@ -193,6 +213,9 @@ esp_err_t initialize_codecs() {
         s_encoder = nullptr;
         return ESP_ERR_INVALID_SIZE;
     }
+    ESP_LOGI(TAG, "Opus encoder ready: free=%u largest=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
 
     esp_opus_dec_cfg_t decoder_config = {
         .sample_rate = kSampleRate,
@@ -202,10 +225,16 @@ esp_err_t initialize_codecs() {
     };
     audio_result = esp_opus_dec_open(&decoder_config, sizeof(decoder_config), &s_decoder);
     if (audio_result != ESP_AUDIO_ERR_OK || !s_decoder) {
+        ESP_LOGE(TAG, "Opus decoder unavailable: result=%d free=%u largest=%u",
+                 (int)audio_result, (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
         esp_opus_enc_close(s_encoder);
         s_encoder = nullptr;
         return ESP_FAIL;
     }
+    ESP_LOGI(TAG, "Opus codecs ready: free=%u largest=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     return ESP_OK;
 }
 
@@ -430,7 +459,7 @@ esp_err_t start_turn(const Command &command) {
     s_running_listening = false;
     publish(VOICE_ASSISTANT_SYNCING);
     xEventGroupSetBits(s_events, kDropPlayback);
-    xQueueReset(s_rx_packets);
+    clear_packet_queue(s_rx_packets);
     if (s_chat && (xEventGroupGetBits(s_events) & kChannelReady)) {
         (void)esp_xiaozhi_chat_send_abort_speaking(
             s_chat, ESP_XIAOZHI_CHAT_ABORT_SPEAKING_REASON_STOP_LISTENING);
@@ -566,40 +595,40 @@ void capture_task(void *) {
         output.len = sizeof(encoded);
         if (esp_opus_enc_process(s_encoder, &input, &output) != ESP_AUDIO_ERR_OK ||
             output.encoded_bytes == 0 || output.encoded_bytes > kMaxOpusBytes) continue;
-        OpusPacket packet = {};
-        packet.size = (uint16_t)output.encoded_bytes;
-        std::memcpy(packet.data, encoded, packet.size);
-        if (xQueueSend(s_tx_packets, &packet, 0) != pdTRUE) {
-            OpusPacket discarded;
-            (void)xQueueReceive(s_tx_packets, &discarded, 0);
-            (void)xQueueSend(s_tx_packets, &packet, 0);
-        }
+        queue_latest_packet(s_tx_packets, copy_packet(encoded, output.encoded_bytes));
     }
 }
 
 void sender_task(void *) {
-    OpusPacket packet;
+    OpusPacket *packet = nullptr;
     for (;;) {
         if (!(xEventGroupGetBits(s_events) & kSendAllowed)) {
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
-        if (xQueueReceive(s_tx_packets, &packet, pdMS_TO_TICKS(60)) == pdTRUE && s_chat) {
-            esp_err_t result = esp_xiaozhi_chat_send_audio_data(
-                s_chat, reinterpret_cast<const char *>(packet.data), packet.size);
-            if (result != ESP_OK) ESP_LOGW(TAG, "Audio send failed: %s", esp_err_to_name(result));
+        if (xQueueReceive(s_tx_packets, &packet, pdMS_TO_TICKS(60)) == pdTRUE) {
+            if (packet && s_chat) {
+                esp_err_t result = esp_xiaozhi_chat_send_audio_data(
+                    s_chat, reinterpret_cast<const char *>(packet->data), packet->size);
+                if (result != ESP_OK) ESP_LOGW(TAG, "Audio send failed: %s", esp_err_to_name(result));
+            }
+            std::free(packet);
+            packet = nullptr;
         }
     }
 }
 
 void playback_task(void *) {
-    OpusPacket packet;
+    OpusPacket *packet = nullptr;
     int16_t pcm[kPcmSamples];
     for (;;) {
         if (xQueueReceive(s_rx_packets, &packet, portMAX_DELAY) != pdTRUE) continue;
-        if (xEventGroupGetBits(s_events) & kDropPlayback) continue;
+        if (!packet) continue;
+        if (xEventGroupGetBits(s_events) & kDropPlayback) {
+            std::free(packet); packet = nullptr; continue;
+        }
         esp_audio_dec_in_raw_t input = {
-            .buffer = packet.data, .len = packet.size, .consumed = 0,
+            .buffer = packet->data, .len = packet->size, .consumed = 0,
             .frame_recover = ESP_AUDIO_DEC_RECOVERY_NONE,
         };
         esp_audio_dec_out_frame_t output = {};
@@ -610,6 +639,8 @@ void playback_task(void *) {
             output.decoded_size && !(xEventGroupGetBits(s_events) & kDropPlayback)) {
             (void)bsp_audio_write(pcm, output.decoded_size);
         }
+        std::free(packet);
+        packet = nullptr;
     }
 }
 
@@ -637,8 +668,8 @@ void cleanup_initialization() {
     if (s_encoder) { esp_opus_enc_close(s_encoder); s_encoder = nullptr; }
     (void)bsp_audio_sleep();
     if (s_suspend_done) { vSemaphoreDelete(s_suspend_done); s_suspend_done = nullptr; }
-    if (s_rx_packets) { vQueueDelete(s_rx_packets); s_rx_packets = nullptr; }
-    if (s_tx_packets) { vQueueDelete(s_tx_packets); s_tx_packets = nullptr; }
+    if (s_rx_packets) { clear_packet_queue(s_rx_packets); vQueueDelete(s_rx_packets); s_rx_packets = nullptr; }
+    if (s_tx_packets) { clear_packet_queue(s_tx_packets); vQueueDelete(s_tx_packets); s_tx_packets = nullptr; }
     if (s_commands) { vQueueDelete(s_commands); s_commands = nullptr; }
     if (s_events) { vEventGroupDelete(s_events); s_events = nullptr; }
 }
@@ -652,12 +683,8 @@ extern "C" esp_err_t voice_assistant_init(voice_assistant_status_callback_t call
     s_status_context = context;
     s_events = xEventGroupCreate();
     s_commands = xQueueCreate(4, sizeof(Command));
-    // Keep enough pre-roll to preserve the start of speech while the state PUT
-    // and WebSocket handshake finish, without consuming most of the C3 heap.
-    s_tx_packets = xQueueCreate(24, sizeof(OpusPacket));
-    s_rx_packets = xQueueCreate(8, sizeof(OpusPacket));
     s_suspend_done = xSemaphoreCreateBinary();
-    if (!s_events || !s_commands || !s_tx_packets || !s_rx_packets || !s_suspend_done) {
+    if (!s_events || !s_commands || !s_suspend_done) {
         cleanup_initialization();
         return ESP_ERR_NO_MEM;
     }
@@ -670,6 +697,17 @@ extern "C" esp_err_t voice_assistant_init(voice_assistant_status_callback_t call
         cleanup_initialization();
         return result;
     }
+    // Opus needs a large contiguous block. Allocate it before packet queues,
+    // while retaining a bounded speech pre-roll and playback queue on the C3.
+    s_tx_packets = xQueueCreate(24, sizeof(OpusPacket *));
+    s_rx_packets = xQueueCreate(8, sizeof(OpusPacket *));
+    if (!s_tx_packets || !s_rx_packets) {
+        cleanup_initialization();
+        return ESP_ERR_NO_MEM;
+    }
+    ESP_LOGI(TAG, "Voice queues ready: free=%u largest=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     bsp_audio_set_volume(70);
     result = esp_event_handler_register(ESP_XIAOZHI_CHAT_EVENTS, ESP_EVENT_ANY_ID,
                                         system_event, nullptr);
@@ -709,9 +747,10 @@ extern "C" bool voice_assistant_begin(const voice_state_snapshot_t *snapshot) {
     size_t payload_size = voice_state_payload_build(snapshot, payload, sizeof(payload));
     if (!payload_size) return false;
 
-    xQueueReset(s_tx_packets);
-    xQueueReset(s_rx_packets);
-    xEventGroupSetBits(s_events, kCapturing | kDropPlayback);
+    xEventGroupSetBits(s_events, kDropPlayback);
+    clear_packet_queue(s_tx_packets);
+    clear_packet_queue(s_rx_packets);
+    xEventGroupSetBits(s_events, kCapturing);
     xEventGroupClearBits(s_events, kSendAllowed | kSpeaking);
     uint32_t turn = s_requested_turn.fetch_add(1) + 1;
     if (!turn) turn = s_requested_turn.fetch_add(1) + 1;
